@@ -393,14 +393,60 @@ class Person {
     }
 }
 
-let schedData;
-let servData;
+class Service {
+	//name, grade teacher are student info; just pull it from the sheet (NOT separate student class)
+	
+	//name, teacher is String
+	//grade is int (0=K)
+	//cat is category... string?
+	//isSupport is bool (false=instruction)
+	//isPushIn is bool:
+	//	true = MUST push in
+	//	false = MUST pull out
+	//time is int (minutes)
+	constructor(name, grade, teacher, cat, isSupport, isPushIn, time) {
+		this.name = name;
+		this.grade = grade;
+		this.teacher = teacher;
+		this.cat = cat;
+		this.isSupport = isSupport;
+		this.isPushIn = isPushIn;
+		this.time = time;
+	}
+	
+	getPriority(){
+		if (this.cat == "Resource" || this.cat == "Recess" || this.cat.startsWith("Trans"))
+			return 0;
+		else if (!this.isSupport)
+			return 1;
+		else
+			return 2;
+	}
+	
+	toEntry(){
+		return [this.teacher, this.cat, this.name];
+	}
+}
+
+let schedData; //raw
+let servData; //raw
 let personnel;
 
 
 let blocklabels;
-let sched;
-let out;
+let mastSched; //processed from schedData
+let servs; //processed from servData
+let solStacks; // list of stacks of potential solutions (one for each priority)
+//sol(ution) is object:
+//	key is Person name (one for each)
+//	val is a list indexed to 10 min blocks, value is which service
+
+let subStacks; // list of stacks of suboptimal possible solutions (one for each priority)
+//identical struct to solStack
+//usage: add to this stack when sub optimal option comes up
+//		 if solStack is empty and subStack isn't; pop subStack and push that sol onto solStack
+
+//-------------------------------------------
 
 const personnelRows = document.querySelector('.personnel-rows');
 const schedInput = document.getElementById('schedin');
@@ -506,6 +552,28 @@ function readExcelFile(file) {
     });
 }
 
+function parseGrade(s){
+	let g = s[0].toUpperCase();
+	if (g == "K") g = "0";
+	return parseInt(g);
+}
+
+function roundUp(num){
+	return Math.ceil(num / 10) * 10;
+}
+
+//"does Service s fit in the master schedule at the time slot starting with index t?"
+//  NO EXCEPTIONS, NO SPLIT (do that elsewhere)
+function masterFit(s,t){
+	
+}
+
+//"does Service s fit in Person p's schedule at the time slot starting with index t?"
+//  call AFTER checking masterFit
+function personFit(s,p,t){
+	//remember, sometimes can share ("overlap")! in fact, it's preferred!
+}
+
 async function generateSchedule() {
     if (!schedInput.files.length || !servInput.files.length) {
         return;
@@ -513,6 +581,7 @@ async function generateSchedule() {
 
     genButton.disabled = true;
 
+	let ready = false;
     try {
         // Load each Excel file into its own workbook variable.
         scheduleWorkbook = await readExcelFile(schedInput.files[0]);
@@ -525,59 +594,153 @@ async function generateSchedule() {
 		schedData = XLSX.utils.sheet_to_json(scheduleSheet, {
 			header: 1
 		});
-		servData = XLSX.utils.sheet_to_json(servicesSheet);
-
+		servData = XLSX.utils.sheet_to_json(servicesSheet, {
+			header: 1
+		});
+		
         // Load the Personnel UI into a list of Person objects.
         personnel = getPersonnel();
+		
+		
+		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
+		personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] }]
+		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
 
         console.log('Schedule data:', schedData);
         console.log('Services data:', servData);
         console.log('Personnel:', personnel);
 
-    } catch (error) {
-        console.error('Error loading Excel files:', error);
-        alert('There was a problem loading one of the Excel files.');
-    } finally {
-        filesSelected();
-    }
-	
-	// =====================================================
-	// Schedule-generation logic will go here.
-	try{
-		blocklabels = schedData.map(row => row[0]);
-		blocklabels.shift(); //removes empty "header" row, leaving only time labels
 		//when reading from sched, block is stored as next index in sched[grade] list,
 		//	so store the labels here:
 		//	blocklabels[i] is the label for sched[grade][i]
+		blocklabels = schedData.map(row => row[0]);
+		blocklabels.shift(); //removes empty "header" row, leaving only time labels
 
-		sched = {}
 		//key is grade # (0=K)
 		//val is list of 10-min blocks in order
-
-		out = {}
-		//key is Adult name (one for each)
-		//val is a list indexed to 10 min blocks, value is which service
-
-		//write `out` to spreadsheet
+		mastSched = {}
+		
 		
 		let classes = schedData[0].slice(1); //excl blank above time label
 		classes = classes.map(String);
 		for (let cls of classes){
 			cls = cls.trim();
 			if (cls.length > 0){
-				sched[cls] = [];
+				mastSched[cls] = [];
 			}
 		}
 		
 		for (let i=1; i<schedData.length; i++){
-			row = schedData[i];
+			const row = schedData[i];
 			for (let j=1; j<row.length; j++){
 				cls = classes[j-1];
-				sched[cls].push(row[j]);
+				mastSched[cls].push(row[j]);
 			}
 		}
 		
-		console.log("Loaded schedule:",sched);
+		console.log("Loaded master sched:",mastSched);
+		
+		servs = [[],[],[]]; //list of "priority classes", which are lists of Service obj
+		
+		for (let i=1; i<servData.length; i++){
+			const row = servData[i];
+			//console.log(row);
+			if (row.length == 0 || row[0].trim().length == 0) continue;
+			let time = roundUp(parseInt(row[7]));
+			const ts = [];
+			if (time <= 40){
+				ts.push(time);
+			}
+			else{
+				while(true){
+					if (time >= 60){
+						time -= 30;
+						ts.push(30);
+					}
+					else if (time == 50){
+						ts.push(30);
+						ts.push(20);
+						break;
+					}
+					else if (time == 40){
+						ts.push(20);
+						ts.push(20);
+						break;
+					}
+					else{
+						ts.push(time);
+						break;
+					}
+				}
+			}
+			for (const t of ts){
+				//Service(name, grade, teacher, cat, isSupport, isPushIn, time)
+				const s = new Service(
+					row[0],
+					parseGrade(row[2]),
+					row[3],
+					row[4],
+					row[5].toUpperCase() == "SUPPORT",
+					row[9][0].toUpperCase() == "G",
+					t
+				);
+				
+				let pi = s.getPriority();
+				servs[pi].push(s);
+			}
+		}
+		
+		console.log("Loaded services:",servs);
+		
+		ready = true;
+    } catch (error) {
+        console.error('Error loading data:', error);
+        alert('There was a problem loading the data.');
+    } finally {
+        filesSelected();
+    }
+	
+	if (!ready) return;
+	console.log("---------------------------");
+	
+	// =====================================================
+	// Schedule-generation logic will go here.
+	try{
+		//each entry is a stack of [sol, next_i] tuples (for the priority matching list index)
+		//next_i is the next serv index to try to add to the sol (simple inc)
+		//sol[ution] is objs with
+		//	Person as key and
+		//	val as list of services in 10 min incs
+		//		each service (list element) is itself a list [teach, svcat, stud] tuples
+		//			(use Service.toEntry())
+		solStacks = Array.from({ length: servs.length }, () => []);
+		subStacks = Array.from({ length: servs.length }, () => []);
+		
+		let sol = {};
+		for (const p of personnel){
+			sol[p] = Array.from({ length: blocklabels.length }, () => []);
+		}
+		solStacks[0].push([sol,0]);
+		
+		//use `const deepCopy = structuredClone(original);` to copy sol objs!
+		for (let pi=0; pi<servs.length; pi++){
+			while(solStacks[pi].length > 0){
+				const [sol, next_i] = solStacks[pi].pop();
+				const last = next_i == servs[pi].length-1; //IF LAST: ADD TO stack[pi+1]!!
+				const curr = servs[pi][next_i];
+				for (let t=0; t<mastSched.length; t++){
+					if(!masterFit(curr,t)){
+						continue;
+					}
+					
+					
+					for (let p=0; p<personnel.length; p++){
+						
+					}
+				}
+			}
+		}
+		
 		
 	} catch (error) {
         console.error('Error generating schedule:', error);
@@ -585,6 +748,10 @@ async function generateSchedule() {
     } finally {
         filesSelected();
     }
+	
+	//write `out` to spreadsheet
+	//display download button
+	
 	// =====================================================
 }
 

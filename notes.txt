@@ -20,11 +20,12 @@ Spreadsheets:
 		- can always push in (except lunch, recess, resource)
 		- sometimes you can pull out
  - Services per kid
+	- IGNORE: case manager (data in Personnel), service description, freq
 	- service category:
 		- "behavior" category can go whenever
 		- others (reading, writing, math, recess, resource) go in that slot on the master schedule
 		- transition 
-			- 5 mins before event until 5 mins after
+			- place in last 10 min chunk
 			- types: beginning & end of day (first/last 10 min slot in master sched), inside from recess, to & from resource
 	- Instruction/support
 		- instruction MUST BE instructor
@@ -32,8 +33,9 @@ Spreadsheets:
 	- Instructional setting (location):
 		- GE (push in)
 		- SE (pull out)
-		- Students in same grade but not in same classroom they can have pull out service at the same times
-		- Alternatively, if two students in same grade have same push in service, they can be at same time
+			- Not a lot of pull out, so if it doesn't exist: use soc stud / science pull out first, but can fall back to "<any>; pull out"
+		- Students in same grade they can have pull out service at the same times
+		- Alternatively, if two students in same grade and the same class have same push in service, they can be at same time
 		- Behavior category counts for "same service"
 	- Time (in minutes): Find chunk of that size (in master calendar) where that much time will fit
 
@@ -46,6 +48,18 @@ Rough Steps:
 2. Look at instruction services for teachers (priority)
 3. Fill in the rest: fill IA schedules with support, additional support overflows into teachers
 
+Round service times up to nearest 10
+
+Splitting up services:
+ - Instruction can't be split (support can)
+ - 10 mins is minimum (ofc)
+ - More than 45 -> split into max 30 min chunks (e.g. 50 splits into 30,20)
+
 Output:
  - Daily schedule for each Adult
-	- kid, service, teacher
+	- teacher, service cat, student (initials)
+	- if overlap (same time), slashes btwn what's different...
+	
+If it doesn't all fit:
+ - Reduce all service times to 3/4 of orig and try again; if THAT doesn't fit, reduce to half of orig and try again
+ - Generate report of if I had to change the times and if any services STILL don't fit.
