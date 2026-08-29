@@ -1,0 +1,51 @@
+Service categories:
+- behavior (any time not recess/resource/lunch)
+- reading, writing, math, recess, resource ("standard", find matching block in master schedule)
+- transition: 5 mins before until 5 mins after, event specified by sub category
+
+new kid and/or services times change -> need to redo schedule
+
+Adults:
+ - two categories: IA and teacher/instructor
+ - set up in UI
+ - grade (priority, not restriction)
+	- guideline for IA; harder line for teacher...
+ - IA can't do instruction/teaching
+
+--------------------
+
+Spreadsheets:
+ - Master schedule (cols are grades)
+	- entries in schedule are service category
+		- can always push in (except lunch, recess, resource)
+		- sometimes you can pull out
+ - Services per kid
+	- service category:
+		- "behavior" category can go whenever
+		- others (reading, writing, math, recess, resource) go in that slot on the master schedule
+		- transition 
+			- 5 mins before event until 5 mins after
+			- types: beginning & end of day (first/last 10 min slot in master sched), inside from recess, to & from resource
+	- Instruction/support
+		- instruction MUST BE instructor
+		- support is either, prioritize IA
+	- Instructional setting (location):
+		- GE (push in)
+		- SE (pull out)
+		- Students in same grade but not in same classroom they can have pull out service at the same times
+		- Alternatively, if two students in same grade have same push in service, they can be at same time
+		- Behavior category counts for "same service"
+	- Time (in minutes): Find chunk of that size (in master calendar) where that much time will fit
+
+To schedule: look at master schedule keyed for that grade, but...
+	if that key doesn't exist, look for key that is "<grade>; <teacher>"
+
+Rough Steps:
+1. Fill in first: resource, recess, transition; those times are locked in the master schedule; (use IA (trust support col in service))
+	- If kid needs support during resource, assign the IA who is for their grade
+2. Look at instruction services for teachers (priority)
+3. Fill in the rest: fill IA schedules with support, additional support overflows into teachers
+
+Output:
+ - Daily schedule for each Adult
+	- kid, service, teacher

@@ -1,0 +1,615 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Service Scheduler</title>
+<link rel="icon" href="favicon.ico" type="image/vnd.microsoft.icon" />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700&display=swap" rel="stylesheet">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/4.7.0/css/font-awesome.min.css">
+<script src="https://unpkg.com/xlsx/dist/xlsx.full.min.js"></script>
+
+<style>
+
+:root{
+    --school-red:#bd1e2c;
+    --bg:#f7f8fa;
+    --card:#ffffff;
+    --text:#333;
+}
+
+*{
+    box-sizing:border-box;
+}
+
+body{
+    margin:0;
+    background:var(--bg);
+    color:var(--text);
+    font-family:'Nunito',sans-serif;
+}
+
+header{
+    background:white;
+    border-top:8px solid var(--school-red);
+    box-shadow:0 2px 8px rgba(0,0,0,.08);
+    padding:24px;
+}
+
+header h1{
+    margin:0;
+    font-weight:700;
+}
+
+header p{
+    margin-top:6px;
+    color:#666;
+}
+
+main{
+    max-width:1100px;
+    margin:30px auto;
+    padding:0 20px;
+}
+
+.card{
+    background:var(--card);
+    border-left:6px solid var(--school-red);
+    border-radius:12px;
+    padding:24px;
+    box-shadow:0 4px 12px rgba(0,0,0,.08);
+}
+
+.controls{
+    display:flex;
+    flex-wrap:wrap;
+    gap:20px;
+    align-items: flex-start;
+}
+
+.control{
+    display:flex;
+    flex-direction:column;
+	flex:1;
+}
+
+label{
+    font-weight:700;
+    margin-bottom:6px;
+}
+
+input{
+    font-family:'Nunito';
+    font-size:15px;
+    font-weight:600;
+    padding:8px;
+}
+
+input[type="date"] {
+  width: 100%;
+  max-width: 200px;
+}
+
+input[type="number"] {
+  width: 100%;
+  min-width: 10ch;
+}
+
+button{
+    margin-top:25px;
+    background:var(--school-red);
+    color:white;
+    border:none;
+    border-radius:8px;
+    padding:12px 22px;
+    font-family:'Nunito';
+    font-weight:700;
+    font-size:16px;
+    cursor:pointer;
+    transition:.2s;
+}
+
+button:hover{
+    transform:translateY(-2px);
+}
+
+#genBtn:disabled {
+    background: #aaa;
+    cursor: not-allowed;
+}
+
+#genBtn:disabled:hover {
+    transform: none;
+}
+
+table{
+    width:100%;
+    margin-top:25px;
+    border-collapse:collapse;
+}
+
+th{
+    background:var(--school-red);
+    color:white;
+    padding:10px;
+    text-align:left;
+}
+
+td{
+    padding:9px;
+    border-bottom:1px solid #ddd;
+}
+
+tbody tr:nth-child(even){
+    background:#fafafa;
+}
+
+#downloadBtn{
+    display:none;
+}
+
+#results{
+    display:none;
+}
+
+.footerStripe{
+    margin-top:40px;
+    height:2px;
+    background:#bd1e2c;
+    opacity:.18;
+    border-radius:2px;
+}
+#messageOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 1000;
+
+    /* Center the dialog */
+    align-items: center;
+    justify-content: center;
+}
+
+#messageBox {
+    position: relative;
+    background: white;
+    padding: 30px;
+    border-radius: 10px;
+    min-width: 400px;
+    max-width: 800px;
+    box-shadow: 0 5px 25px rgba(0, 0, 0, 0.3);
+}
+
+#closeMessage {
+    position: absolute;
+    top: 8px;
+    right: 12px;
+
+    border: none;
+    background: none;
+    font-size: 28px;
+    cursor: pointer;
+    color: #666;
+}
+
+#closeMessage:hover {
+    color: #000;
+}
+
+
+/* Personnel */
+.personnel{
+    margin-bottom:24px;
+}
+
+.personnel summary{
+    display:flex;
+    align-items:center;
+    gap:8px;
+    cursor:pointer;
+    font-size:18px;
+    font-weight:700;
+    list-style:none;
+    user-select:none;
+}
+
+.personnel summary::-webkit-details-marker{
+    display:none;
+}
+
+.personnel summary::before{
+    content:"\f0da";
+    font-family:FontAwesome;
+    font-size:16px;
+    width:16px;
+}
+
+.personnel[open] summary::before{
+    content:"\f0d7";
+}
+
+.personnel-rows{
+    margin-top:12px;
+}
+
+.personnel-row{
+    display:grid;
+    grid-template-columns:minmax(180px, 1fr) 130px auto 36px;
+    align-items:center;
+    gap:10px;
+    margin-bottom:10px;
+}
+
+.personnel-row input[type="text"],
+.personnel-row select{
+    width:100%;
+    min-width:0;
+    padding:8px;
+    font-family:'Nunito';
+    font-size:15px;
+    font-weight:600;
+    border:1px solid #ccc;
+    border-radius:6px;
+}
+
+.personnel-checks{
+    display:flex;
+    align-items:center;
+    gap:10px;
+}
+
+.personnel-check{
+    display:flex;
+    align-items:center;
+    gap:3px;
+    margin:0;
+    font-weight:600;
+    font-size:14px;
+}
+
+.personnel-check input{
+    margin:0;
+    padding:0;
+}
+
+.personnel-delete{
+    width:36px;
+    height:36px;
+    margin:0;
+    padding:0;
+    background:none;
+    color:#777;
+    font-size:17px;
+}
+
+.personnel-delete:hover{
+    color:var(--school-red);
+    transform:none;
+}
+
+.personnel-add{
+    margin:2px 0 0;
+    padding:6px 12px;
+    font-size:14px;
+    background:#eee;
+    color:#444;
+}
+
+.personnel-add:hover{
+    transform:none;
+    background:#ddd;
+}
+
+</style>
+</head>
+
+<body>
+
+<header>
+    <h1>Service Scheduler</h1>
+</header>
+
+<main>
+
+<div class="card">
+
+
+<details class="personnel" open>
+    <summary>Personnel</summary>
+
+    <div class="personnel-rows">
+
+        <div class="personnel-row">
+            <input type="text" placeholder="Name">
+
+            <select>
+                <option>Instructor</option>
+                <option>IA</option>
+            </select>
+
+            <div class="personnel-checks">
+                <label class="personnel-check"><input type="checkbox"> K</label>
+                <label class="personnel-check"><input type="checkbox"> 1</label>
+                <label class="personnel-check"><input type="checkbox"> 2</label>
+                <label class="personnel-check"><input type="checkbox"> 3</label>
+                <label class="personnel-check"><input type="checkbox"> 4</label>
+                <label class="personnel-check"><input type="checkbox"> 5</label>
+            </div>
+
+            <button type="button" class="personnel-delete" title="Delete person">
+                <i class="fa fa-trash"></i>
+            </button>
+        </div>
+
+        <button type="button" class="personnel-add" title="Add person">
+            <i class="fa fa-plus"></i>
+        </button>
+
+    </div>
+</details>
+
+<div class="controls">
+
+<div class="control">
+<label>Master Schedule Excel File</label>
+<input id="schedin" type="file" accept=".xlsx,.xls">
+</div>
+
+<div class="control">
+<label>Student Services Excel File</label>
+<input id="servin" type="file" accept=".xlsx,.xls">
+</div>
+
+<button id="genBtn">
+Generate Schedule
+</button>
+
+</div>
+
+<div id="results">
+
+<button id="downloadBtn">
+Download Schedule Excel
+</button>
+
+</div>
+
+</div>
+
+<div class="footerStripe"></div>
+
+</main>
+
+<script>
+
+class Person {
+    // name is String, isIA is bool (false=instructor), grades is list of ints (0=K)
+    constructor(name, isIA, grades) {
+        this.name = name;
+        this.isIA = isIA;
+        this.grades = grades;
+    }
+}
+
+let schedData;
+let servData;
+let personnel;
+
+
+let blocklabels;
+let sched;
+let out;
+
+const personnelRows = document.querySelector('.personnel-rows');
+const schedInput = document.getElementById('schedin');
+const servInput = document.getElementById('servin');
+const genButton = document.getElementById('genBtn');
+
+function addPersonnelRow() {
+    const row = document.createElement('div');
+    row.className = 'personnel-row';
+
+    row.innerHTML = `
+        <input type="text" placeholder="Name">
+
+        <select>
+            <option>Instructor</option>
+            <option>IA</option>
+        </select>
+
+        <div class="personnel-checks">
+            <label class="personnel-check"><input type="checkbox"> K</label>
+            <label class="personnel-check"><input type="checkbox"> 1</label>
+            <label class="personnel-check"><input type="checkbox"> 2</label>
+            <label class="personnel-check"><input type="checkbox"> 3</label>
+            <label class="personnel-check"><input type="checkbox"> 4</label>
+            <label class="personnel-check"><input type="checkbox"> 5</label>
+        </div>
+
+        <button type="button" class="personnel-delete" title="Delete person">
+            <i class="fa fa-trash"></i>
+        </button>
+    `;
+
+    personnelRows.insertBefore(row, personnelRows.querySelector('.personnel-add'));
+    updateDeleteButtons();
+}
+
+function deletePersonnelRow(row) {
+    const rows = personnelRows.querySelectorAll('.personnel-row');
+
+    // Always keep at least one personnel row.
+    if (rows.length <= 1) {
+        return;
+    }
+
+    row.remove();
+    updateDeleteButtons();
+}
+
+function updateDeleteButtons() {
+    const rows = personnelRows.querySelectorAll('.personnel-row');
+    const deleteButtons = personnelRows.querySelectorAll('.personnel-delete');
+
+    deleteButtons.forEach(button => {
+        button.disabled = rows.length <= 1;
+        button.style.opacity = rows.length <= 1 ? '0.35' : '1';
+        button.style.cursor = rows.length <= 1 ? 'default' : 'pointer';
+    });
+}
+
+function getPersonnel() {
+    const people = [];
+    const rows = personnelRows.querySelectorAll('.personnel-row');
+    const grades = [0, 1, 2, 3, 4, 5];
+
+    rows.forEach(row => {
+        const name = row.querySelector('input[type="text"]').value.trim();
+        const isIA = row.querySelector('select').value === 'IA';
+        const checkboxes = row.querySelectorAll('.personnel-checks input[type="checkbox"]');
+        const checkedGrades = [];
+
+        checkboxes.forEach((checkbox, index) => {
+            if (checkbox.checked) {
+                checkedGrades.push(grades[index]);
+            }
+        });
+
+        people.push(new Person(name, isIA, checkedGrades));
+    });
+
+    return people;
+}
+
+function filesSelected() {
+    genButton.disabled = !schedInput.files.length || !servInput.files.length;
+}
+
+function readExcelFile(file) {
+    return new Promise((resolve, reject) => {
+        const reader = new FileReader();
+
+        reader.onload = event => {
+            try {
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                resolve(workbook);
+            } catch (error) {
+                reject(error);
+            }
+        };
+
+        reader.onerror = () => reject(reader.error);
+        reader.readAsArrayBuffer(file);
+    });
+}
+
+async function generateSchedule() {
+    if (!schedInput.files.length || !servInput.files.length) {
+        return;
+    }
+
+    genButton.disabled = true;
+
+    try {
+        // Load each Excel file into its own workbook variable.
+        scheduleWorkbook = await readExcelFile(schedInput.files[0]);
+        servicesWorkbook = await readExcelFile(servInput.files[0]);
+		
+		const scheduleSheet = scheduleWorkbook.Sheets[scheduleWorkbook.SheetNames[0]];
+		const servicesSheet = servicesWorkbook.Sheets[servicesWorkbook.SheetNames[0]];
+
+		//load globals
+		schedData = XLSX.utils.sheet_to_json(scheduleSheet, {
+			header: 1
+		});
+		servData = XLSX.utils.sheet_to_json(servicesSheet);
+
+        // Load the Personnel UI into a list of Person objects.
+        personnel = getPersonnel();
+
+        console.log('Schedule data:', schedData);
+        console.log('Services data:', servData);
+        console.log('Personnel:', personnel);
+
+    } catch (error) {
+        console.error('Error loading Excel files:', error);
+        alert('There was a problem loading one of the Excel files.');
+    } finally {
+        filesSelected();
+    }
+	
+	// =====================================================
+	// Schedule-generation logic will go here.
+	try{
+		blocklabels = schedData.map(row => row[0]);
+		blocklabels.shift(); //removes empty "header" row, leaving only time labels
+		//when reading from sched, block is stored as next index in sched[grade] list,
+		//	so store the labels here:
+		//	blocklabels[i] is the label for sched[grade][i]
+
+		sched = {}
+		//key is grade # (0=K)
+		//val is list of 10-min blocks in order
+
+		out = {}
+		//key is Adult name (one for each)
+		//val is a list indexed to 10 min blocks, value is which service
+
+		//write `out` to spreadsheet
+		
+		let classes = schedData[0].slice(1); //excl blank above time label
+		classes = classes.map(String);
+		for (let cls of classes){
+			cls = cls.trim();
+			if (cls.length > 0){
+				sched[cls] = [];
+			}
+		}
+		
+		for (let i=1; i<schedData.length; i++){
+			row = schedData[i];
+			for (let j=1; j<row.length; j++){
+				cls = classes[j-1];
+				sched[cls].push(row[j]);
+			}
+		}
+		
+		console.log("Loaded schedule:",sched);
+		
+	} catch (error) {
+        console.error('Error generating schedule:', error);
+        alert('There was a problem generating the schedule.');
+    } finally {
+        filesSelected();
+    }
+	// =====================================================
+}
+
+// Add/delete personnel rows.
+personnelRows.addEventListener('click', event => {
+    const addButton = event.target.closest('.personnel-add');
+    const deleteButton = event.target.closest('.personnel-delete');
+
+    if (addButton) {
+        addPersonnelRow();
+    } else if (deleteButton) {
+        deletePersonnelRow(deleteButton.closest('.personnel-row'));
+    }
+});
+
+// Keep Generate Schedule disabled until both files have been selected.
+schedInput.addEventListener('change', filesSelected);
+servInput.addEventListener('change', filesSelected);
+genButton.addEventListener('click', generateSchedule);
+
+// Set the initial state.
+filesSelected();
+updateDeleteButtons();
+
+</script>
+
+</body>
+</html>
