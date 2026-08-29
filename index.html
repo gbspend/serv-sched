@@ -438,7 +438,7 @@ let mastSched; //processed from schedData
 let servs; //processed from servData
 let solStacks; // list of stacks of potential solutions (one for each priority)
 //sol(ution) is object:
-//	key is Person name (one for each)
+//	key is Person's index in `personnel` (one for each)
 //	val is a list indexed to 10 min blocks, value is which service
 
 let subStacks; // list of stacks of suboptimal possible solutions (one for each priority)
@@ -564,14 +564,23 @@ function roundUp(num){
 
 //"does Service s fit in the master schedule at the time slot starting with index t?"
 //  NO EXCEPTIONS, NO SPLIT (do that elsewhere)
+// returns:
+//		-1: doesn't fit
+//		0: suboptimal fit
+//		1: optimal fit
 function masterFit(s,t){
-	
+	return -1;
 }
 
 //"does Service s fit in Person p's schedule at the time slot starting with index t?"
 //  call AFTER checking masterFit
+// returns:
+//		-1: doesn't fit
+//		0: suboptimal fit
+//		1: optimal fit
 function personFit(s,p,t){
 	//remember, sometimes can share ("overlap")! in fact, it's preferred!
+	return -1;
 }
 
 async function generateSchedule() {
@@ -591,12 +600,8 @@ async function generateSchedule() {
 		const servicesSheet = servicesWorkbook.Sheets[servicesWorkbook.SheetNames[0]];
 
 		//load globals
-		schedData = XLSX.utils.sheet_to_json(scheduleSheet, {
-			header: 1
-		});
-		servData = XLSX.utils.sheet_to_json(servicesSheet, {
-			header: 1
-		});
+		schedData = XLSX.utils.sheet_to_json(scheduleSheet, { header: 1 });
+		servData  = XLSX.utils.sheet_to_json(servicesSheet, { header: 1 });
 		
         // Load the Personnel UI into a list of Person objects.
         personnel = getPersonnel();
@@ -709,7 +714,7 @@ async function generateSchedule() {
 		//each entry is a stack of [sol, next_i] tuples (for the priority matching list index)
 		//next_i is the next serv index to try to add to the sol (simple inc)
 		//sol[ution] is objs with
-		//	Person as key and
+		//	Person's index in `personnel` as key and
 		//	val as list of services in 10 min incs
 		//		each service (list element) is itself a list [teach, svcat, stud] tuples
 		//			(use Service.toEntry())
@@ -717,30 +722,79 @@ async function generateSchedule() {
 		subStacks = Array.from({ length: servs.length }, () => []);
 		
 		let sol = {};
-		for (const p of personnel){
+		for (let p=0; p<personnel.length; p++){
 			sol[p] = Array.from({ length: blocklabels.length }, () => []);
 		}
 		solStacks[0].push([sol,0]);
 		
+		const SOLS = []; //complete solutions! :D
+		const SUBS = []; //complete, but suboptimal solutions
+		let opts = 0; //just curious: stat of how many options are explored
+		
 		//use `const deepCopy = structuredClone(original);` to copy sol objs!
 		for (let pi=0; pi<servs.length; pi++){
+			const lastpi = pi == servs.lenght-1;
 			while(solStacks[pi].length > 0){
+				opts++; //stats
 				const [sol, next_i] = solStacks[pi].pop();
-				const last = next_i == servs[pi].length-1; //IF LAST: ADD TO stack[pi+1]!!
+				const lastserv = next_i == servs[pi].length-1; //IF LAST: ADD TO stack[pi+1]!! :D
+														   // unless last pi; then you found a solution!
 				const curr = servs[pi][next_i];
 				for (let t=0; t<mastSched.length; t++){
-					if(!masterFit(curr,t)){
+					const mfit = masterFit(curr,t);
+					if(mfit < 0){ //just doesn't fit
 						continue;
 					}
 					
-					
 					for (let p=0; p<personnel.length; p++){
+						const pfit = personFit(curr,personnel[p],t);
+						if (pfit < 0){
+							continue;
+						}
 						
+						const solCopy = structuredClone(sol);
+						solCopy[p][t].push(curr.toEntry());
+						
+						if (mfit > 0 && pfit > 0){ //optimal
+							if(!lastserv){
+								solStacks[pi].push([solCopy,next_i+1]);
+							}
+							else if (!lastpi){
+								solStacks[pi+1].push([solCopy,next_i+1]);
+							}
+							else{
+								SOLS.push(solCopy);
+							}
+						}
+						else { //suboptimal
+							if(!lastserv){
+								subStacks[pi].push([solCopy,next_i+1]);
+							}
+							else if (!lastpi){
+								subStacks[pi+1].push([solCopy,next_i+1]);
+							}
+							else{
+								SUBS.push(solCopy);
+							}
+						}
 					}
 				}
+				
+				//when solStacks[pi] is empty AND we're desperate (no sols in next pi or SOLS, where approp.):
+				//then copy over the top suboptimal solution and keep going
+				if (((!lastpi && solStacks[pi+1].length == 0) || (lastpi && SOLS.length == 0)) &&
+					solStacks[pi].length == 0 && subStacks[pi].length > 0){
+					solStacks[pi].push(subStacks[pi].pop()); //move top suboptimal to sol
+				}
 			}
+			
+			//when moving to next pi:
+			//	solStacks[new_pi] will be populated
+			//	IGNORE subStacks[old_pi] for now (optimistic)
+			//		If I do decide to use it, do I need to think about subStack[old_pi]'s order...?
 		}
 		
+		console.log("Considered",opts,"options");
 		
 	} catch (error) {
         console.error('Error generating schedule:', error);
