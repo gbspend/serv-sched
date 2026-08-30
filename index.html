@@ -99,21 +99,18 @@ button:hover{
     transform:translateY(-2px);
 }
 
-#genBtn:disabled {
-    background: #aaa;
-    cursor: not-allowed;
-}
-
+#genBtn:disabled,
 #genBtn:disabled:hover {
+    background: #aaa;
+    color: #fff;
+    cursor: not-allowed;
     transform: none;
 }
 
-#downloadBtn{
-    display:none;
-}
-
 #results{
-    display:none;
+    margin-left: 30px;
+	margin-top: 20px;
+	display: none;
 }
 
 .footerStripe{
@@ -168,7 +165,8 @@ button:hover{
 }
 
 .personnel-row input[type="text"],
-.personnel-row select{
+.personnel-row select,
+.capped-select {
     width:100%;
     min-width:0;
     padding:8px;
@@ -227,10 +225,49 @@ button:hover{
     background:#ddd;
 }
 
+#loadingOverlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    background: rgba(0, 0, 0, 0.45);
+    z-index: 9999;
+
+    align-items: center;
+    justify-content: center;
+
+    cursor: wait;
+}
+
+#loadingBox {
+    background: white;
+    border-radius: 12px;
+    padding: 30px 45px;
+    text-align: center;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    font-size: 18px;
+    font-weight: 700;
+}
+
+#loadingBox .fa-spinner {
+    font-size: 32px;
+    margin-bottom: 15px;
+}
+
+.capped-select {
+	max-width: 250px;
+	text-overflow: ellipsis;
+}
+
 </style>
 </head>
 
 <body>
+<div id="loadingOverlay">
+    <div id="loadingBox">
+        <i class="fa fa-spinner fa-spin"></i>
+        <div>Scheduling...</div>
+    </div>
+</div>
 
 <header>
     <h1>Service Scheduler</h1>
@@ -293,14 +330,27 @@ Generate Schedule
 
 </div>
 
-<div id="results">
+<div class="control">
+<label>Reduce All Service Times</label>
+<select id="reduce-sel" class="capped-select">
+	<option>None</option>
+	<option>3/4</option>
+	<option>Half</option>
+</select>
+</div>
 
-<button id="downloadBtn">
-Download Schedule Excel
-</button>
 
 </div>
 
+<div id="results">
+<div class="personnel-rows">
+		<b>⚠️ The following services couldn't fit in the schedule:</b>
+        <ul id="missing-ul">
+		<li>Excluded Service</li>
+		<li>Excluded Service</li>
+		<li>Excluded Service</li>
+		</ul>
+</div>
 </div>
 
 <div class="footerStripe"></div>
@@ -387,7 +437,7 @@ class Service {
 	
 	toEntry(){
 		//including grade for overlap purposes; don't need to include that in final output
-		return [this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Svc" : "Ins"];
+		return [this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Sup" : "Ins"];
 	}
 }
 
@@ -553,6 +603,50 @@ function entry2Str(e){
 	return temp.join(", ");
 }
 
+/*
+if (ttype.includes("recess")){
+	subcats = ["recess in"];
+}
+else if (ttype.includes("resource")){
+	subcats = ["res_in","res_out"];
+}
+else if (ttype.includes("begin")){
+	subcats = ["begin","end"];
+}
+*/
+function decodeTran(cat){
+	if (!cat.startsWith("Trans")) return cat;
+	const ttype = cat.split(" ")[1].trim().toLowerCase();
+	if (ttype.includes("recess")){
+		return "Transition recess in";
+	}
+	else if(ttype.includes("res_in") || ttype.includes("res_out")){
+		return "Transition resource";
+	}
+	else if(ttype.includes("begin") || ttype.includes("end")){
+		return "Transition begin/end day";
+	}
+}
+
+//toEntry() -> [this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Sup" : "Ins"]
+function entriesOutStr(l){
+	if (l.length == 0)
+		return "";
+	let ret = l[0][1]+" - "; //start with teacher from first entry
+	let svcs = {};
+	for (let le of l){
+		let cat = decodeTran(le[2])+" "+le[4];
+		if (!Object.hasOwn(svcs,cat))
+			svcs[cat] = [];
+		svcs[cat].push(le[3]);
+	}
+	for (let svc of Object.keys(svcs)){
+		const ns = svcs[svc].join(", ");
+		ret += svc + ": " + ns + "; ";
+	}
+	return ret.slice(0,-2); //cut off last "; "
+}
+
 //take raw sol[p][t] list and raw Service.toEntry() and checks if the list contains that entry
 function persTimeHasEntry(pt, e){
 	for(let pte of pt){
@@ -642,9 +736,20 @@ function masterFit(s,t){
 	return ret;
 }
 
+//[this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Sup" : "Ins"];
+
 //is service s a valid overlap with the other services at that time?
 //		others <- sched[p][t] and contains Service.toEntry() "tuples": grade,teach,cat,name
 function validOverlap(others, s){
+	//special recess support and recess transition check (move??)
+	for (let tup of others){
+		if (
+			tup[2].toLowerCase().includes("recess") &&
+			s.cat.toLowerCase().includes("recess") &&
+			tup[3] == s.name
+		)
+		return true;
+	}
 	if (others.length >= 4)
 		return false;
 	//category doesn't matter!
@@ -749,10 +854,11 @@ async function generateSchedule() {
         return;
     }
 
-    genButton.disabled = true;
-
 	let ready = false;
     try {
+		const selectElement = document.getElementById("reduce-sel");
+		const reduceVal = selectElement.value;
+	
         // Load each Excel file into its own workbook variable.
         scheduleWorkbook = await readExcelFile(schedInput.files[0]);
         servicesWorkbook = await readExcelFile(servInput.files[0]);
@@ -765,21 +871,25 @@ async function generateSchedule() {
 		servData  = XLSX.utils.sheet_to_json(servicesSheet, { header: 1 });
 		
         // Load the Personnel UI into a list of Person objects.
-        personnel = getPersonnel();
 		
-		/*
-		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
-		personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] },
-		/*
-		{ "name": "TEMP1", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		{ "name": "TEMP2", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		{ "name": "TEMP3", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		{ "name": "TEMP4", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		{ "name": "TEMP5", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		/
-		]
-		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
-		*/
+		if (false){
+        personnel = getPersonnel();
+		}
+		else{
+			//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
+			personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] },
+			
+			{ "name": "TEMP1", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+			{ "name": "TEMP2", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+			
+			{ "name": "TEMP3", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+			{ "name": "TEMP4", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+			{ "name": "TEMP5", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+			
+			]
+			//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
+		}
+		
 
         console.log('Schedule data:', schedData);
         console.log('Services data:', servData);
@@ -867,6 +977,12 @@ async function generateSchedule() {
 			}
 			else{
 				let time = roundUp(parseInt(row[7]));
+				if (reduceVal == "3/4"){
+					time = roundUp(time*.75);
+				}
+				else if (reduceVal == "Half"){
+					time = roundUp(time*.5);
+				}
 				const ts = [];
 				if (time <= 40){
 					ts.push(time);
@@ -937,8 +1053,6 @@ async function generateSchedule() {
     } catch (error) {
         console.error('Error loading data:', error);
         alert('There was a problem loading the data.');
-    } finally {
-        filesSelected();
     }
 	
 	if (!ready) return;
@@ -1080,21 +1194,16 @@ async function generateSchedule() {
 				}
 			}
 			
-			//TEMP TEST EXPERIMENT
-			//		maybe only do this after seeing that service hasn't been scheduled after ~100 attempts?
-			//			...how to track?
+			//TODO: revisit?
 			if(!anyopt && anysub){ //no opt found, but 1+ sub was, so treat one sub as opt ("best we've got")
 				solStacks[pi].push(subStacks[pi].pop());
 			}
 			
+			//TODO: Try splitting Services!
 			//AFTER: add ALL split-up versions of this service to the suboptimal stack (right??)
 			//	create a solCopy, call curr.split(), try to fit each 10 minute split-Serv in...? BUT THE OPTIONS?!!!??!
 			
 			
-			//Sanity verification: No action necessary when moving to next pi :)
-			//	solStacks[new_pi] will be populated
-			//	subStacks[new_pi] will also (likely) be populated, so
-			//		MUST IGNORE subStacks[old_pi]---they're incomplete!!
 		}
 		
 		console.log("Considered",opts,"options");
@@ -1102,8 +1211,6 @@ async function generateSchedule() {
 	} catch (error) {
         console.error('Error generating schedule:', error);
         alert('There was a problem generating the schedule.');
-    } finally {
-        filesSelected();
     }
 	
 	console.log(SOLS);
@@ -1120,18 +1227,30 @@ async function generateSchedule() {
 		return false;
 	}
 	
-	for(let sol of SOLS){
-		console.log(sol);
-		let miss = [];
-		for(let k of Object.keys(servs)){
-			for(let s of servs[k]){
-				let e = s.toEntry();
-				let found = false;
-				if (!solHasE(sol,e))
-					miss.push(s);
-			}
+	const sol = SOLS[0]; //TODO: revisit? More possible solutions as sheets in the excel??
+	
+	console.log(sol);
+	let miss = [];
+	for(let k of Object.keys(servs)){
+		for(let s of servs[k]){
+			let e = s.toEntry();
+			let found = false;
+			if (!solHasE(sol,e))
+				miss.push(s);
 		}
-		console.log(miss);
+	}
+	
+	console.log(miss);
+	
+	if(miss.length > 0){
+		const parent = document.getElementById('missing-ul');
+		parent.replaceChildren();
+		document.getElementById("results").style.display = "block";
+		for (let ms of miss){
+			const li = document.createElement("li");
+			li.textContent = entry2Str(ms.toEntry());
+			parent.appendChild(li);
+		}
 	}
 	
 	//prep data
@@ -1140,16 +1259,10 @@ async function generateSchedule() {
 		row1.push(p.name);
 	}
 	const data = [row1];
-	const sol = SOLS[0];
 	for(let i=0; i<blocklabels.length;i++){
 		const row = [blocklabels[i]];
 		for(let p of Object.keys(sol)){
-			let entries = [];
-			const l = sol[p][i];
-			for(let le of l){
-				entries.push(entry2Str(le));
-			}
-			row.push(entries.join("; "));
+			row.push(entriesOutStr(sol[p][i]));
 		}
 		data.push(row);
 	}
@@ -1160,12 +1273,27 @@ async function generateSchedule() {
 	XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
 
 	// Triggers an automatic browser download
-	XLSX.writeFile(workbook, "UserData.xlsx");
-	
-	//write `out` to spreadsheet
-	//display download button
+	XLSX.writeFile(workbook, "ComputedSchedule.xlsx");
 	
 	// =====================================================
+}
+
+async function runSchedule() {
+    const loadingOverlay = document.getElementById('loadingOverlay');
+
+    loadingOverlay.style.display = 'flex';
+	genButton.disabled = true;
+	document.getElementById("results").style.display = "none";
+
+    // Give the browser time to display the overlay
+    await new Promise(resolve => setTimeout(resolve, 0));
+
+    try {
+        await generateSchedule();
+    } finally {
+        loadingOverlay.style.display = 'none';
+		filesSelected();
+    }
 }
 
 // Add/delete personnel rows.
@@ -1183,7 +1311,7 @@ personnelRows.addEventListener('click', event => {
 // Keep Generate Schedule disabled until both files have been selected.
 schedInput.addEventListener('change', filesSelected);
 servInput.addEventListener('change', filesSelected);
-genButton.addEventListener('click', generateSchedule);
+genButton.addEventListener('click', runSchedule);
 
 // Set the initial state.
 filesSelected();

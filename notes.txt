@@ -63,3 +63,23 @@ Output:
 If it doesn't all fit:
  - Reduce all service times to 3/4 of orig and try again; if THAT doesn't fit, reduce to half of orig and try again
  - Generate report of if I had to change the times and if any services STILL don't fit.
+ 
+ 
+=======================
+
+TODO: 
+
+SORT BY NUMBER OF OPTIONS!
+
+Solve kinder first (ONLY K schedule and ONLY K Personnel), lock it in, then use that as initial sol for regular sched
+
+
+------------------------
+DONE :
+Add reduce service time dropdown: None, 3/4, Half
+
+Transition out of recess can overlap with recess support
+
+Finish UI:
+ - direct DL OK
+ - but show which svcs couldn't be scheduled
