@@ -849,6 +849,161 @@ function findAllFits(sol,curr){
 	return ret;
 }
 
+function emptySol(){
+	let sol = {};
+	for (let p=0; p<personnel.length; p++){
+		sol[p] = Array.from({ length: blocklabels.length }, () => []);
+	}
+	return sol;
+}
+
+//gen solution for given list of services, starting with `sol` (emptySol())
+//	DOESN'T RETURN: clears and fills SOLS (and SUBS)
+function solveServices(servs, sol){
+	//each entry is a stack of [sol, next_i] tuples (for the priority matching list index)
+	//next_i is the next serv index to try to add to the sol (simple inc)
+	//sol[ution] is objs with
+	//	Person's index in `personnel` as key and
+	//	val as list of services in 10 min incs
+	//		each service (list element) is itself a list [teach, svcat, stud] tuples
+	//			(use Service.toEntry())
+	solStacks = Array.from({ length: servs.length }, () => []);
+	subStacks = Array.from({ length: servs.length }, () => []);
+	
+	solStacks[0].push([sol,0]);
+	
+	function sol2Str(sl){
+		let ret = "";
+		for (let p=0; p<personnel.length; p++){
+			ret += sl[p].map(row => row.join(',')).join('\n');
+		}
+		return ret;
+	}
+	
+	SOLS = []; //complete solutions! :D
+	SUBS = []; //complete, but suboptimal solutions
+	let opts = 0; //just curious: stat of how many options are explored
+	
+	staxMax = [0,0,0];
+	
+	//use `const deepCopy = structuredClone(original);` to copy sol objs!
+	while(true){
+		//get current highest pi
+		if(SOLS.length > 0)
+			break; //SOLUTION FOUND!! :D
+		let pi = 0;
+		if (solStacks[2].length > 0)
+			pi = 2;
+		else if (solStacks[1].length > 0)
+			pi = 1;
+		const lastpi = pi == servs.length-1;
+		
+		//TEMP record stats...
+		for(let i=0; i<3; i++){
+			if (solStacks[i].length == 0)
+				continue;
+			staxMax[i] = Math.max(staxMax[i], solStacks[i].at(-1)[1]);
+		}
+		opts++;
+		//TEMP ^
+		
+		//FIXED: moved to top of loop, because bottom doesn't have next pi.
+		//when solStacks[pi] is empty AND we're desperate (no sols in next pi or SOLS, where approp.):
+		//then copy over the top suboptimal solution and keep going
+		if (((!lastpi && solStacks[pi+1].length == 0) || (lastpi && SOLS.length == 0)) &&
+			solStacks[pi].length == 0 && subStacks[pi].length > 0){
+			solStacks[pi].push(subStacks[pi].pop()); //move top suboptimal to sol
+		}
+		
+		//pop solution stack
+		if(solStacks[pi].length == 0){
+			console.log(solStacks);
+			console.log(subStacks);
+			throw new Error("solStacks[pi].length == 0");
+		}
+		let [sol, next_i] = solStacks[pi].pop();
+		
+		const lastserv = next_i == servs[pi].length-1;
+		const curr = servs[pi][next_i];
+		console.log("Fitting",pi,next_i,":",curr);
+		
+		curr.tries++;
+		if (curr.tries > 100){
+			console.log("Giving up on:",curr);
+			console.log("Moving on to:",next_i+1);
+			
+			if (next_i+1 >= servs[pi].length){
+				next_i = 0;
+				pi++;
+			}
+			if (pi >= servs.length)
+				SOLS.push(sol);
+			else
+				solStacks[pi].push([sol,next_i+1]);
+			continue;
+		}
+		if(staxMax[pi] == next_i) console.log("Fitting",pi,next_i,":",curr);
+		if(staxMax[pi] == next_i) console.log(solStacks[pi].length,"left");
+		
+		let anyopt = false;
+		let anysub = false;
+		
+		for(let tup of findAllFits(sol,curr)){
+			const [p,t,fit] = tup;
+			const solCopy = structuredClone(sol);
+			
+			let tleft = curr.time;
+			let st = t;
+			do{
+				solCopy[p][st].push(curr.toEntry());
+				tleft -= 10;
+				st++;
+			}while(tleft > 0);
+			
+			
+			if(staxMax[pi] == next_i) console.log("\tpfit found: ",p,t,solCopy[p][t].length);
+			
+			if (fit > 0){ //optimal
+				anyopt = true;
+				if(!lastserv){
+					solStacks[pi].push([solCopy,next_i+1]);
+				}
+				else if (!lastpi){
+					solStacks[pi+1].push([solCopy,0]);
+				}
+				else{
+					SOLS.push(solCopy);
+				}
+			}
+			else { //suboptimal
+				anysub = true;
+				if(!lastserv){
+					subStacks[pi].push([solCopy,next_i+1]);
+				}
+				else if (!lastpi){
+					subStacks[pi+1].push([solCopy,0]);
+				}
+				else{
+					SUBS.push(solCopy);
+				}
+			}
+		}
+		
+		//TODO: revisit?
+		if(!anyopt && anysub){ //no opt found, but 1+ sub was, so treat one sub as opt ("best we've got")
+			solStacks[pi].push(subStacks[pi].pop());
+		}
+		
+		//TODO: Try splitting Services!
+		//AFTER: add ALL split-up versions of this service to the suboptimal stack (right??)
+		//	create a solCopy, call curr.split(), try to fit each 10 minute split-Serv in...? BUT THE OPTIONS?!!!??!
+		
+		
+	}
+	
+	console.log("Considered",opts,"options");
+}
+
 async function generateSchedule() {
     if (!schedInput.files.length || !servInput.files.length) {
         return;
@@ -941,6 +1096,7 @@ async function generateSchedule() {
 		console.log("Loaded master sched:",masterSched);
 		
 		servs = [[],[],[]]; //list of "priority classes", which are lists of Service obj
+		Kservs = [[],[],[]];
 		const servcats = new Set(); //set of seen service categories, for validation
 		
 		for (let i=1; i<servData.length; i++){
@@ -972,7 +1128,7 @@ async function generateSchedule() {
 						10
 					);
 					const pi = s.getPriority();
-					servs[pi].unshift(s);
+					s.grade==0 ? Kservs[pi].unshift(s) : servs[pi].unshift(s);
 				}
 			}
 			else{
@@ -1025,14 +1181,16 @@ async function generateSchedule() {
 					
 					const pi = s.getPriority();
 					if(s.cat.includes("Behav"))
-						servs[pi].push(s); //Add Behavs to BOTTOM of stack because they're flexible
+						//Add Behavs to BOTTOM of stack because they're flexible
+						s.grade==0 ? Kservs[pi].push(s) : servs[pi].push(s);
 					else
-						servs[pi].unshift(s);
+						s.grade==0 ? Kservs[pi].unshift(s) : servs[pi].unshift(s);
 				}
 			}
 		}
 		
 		console.log("Loaded services:",servs);
+		console.log("Loaded KINDER servs:",Kservs);
 		
 		//validate
 		if (!servcats.isSubsetOf(schedCats)){
@@ -1059,155 +1217,14 @@ async function generateSchedule() {
 	console.log("---------------------------");
 	
 	// =====================================================
-	// Schedule-generation logic will go here.
+	// Schedule-generation logic
 	try{
-		//each entry is a stack of [sol, next_i] tuples (for the priority matching list index)
-		//next_i is the next serv index to try to add to the sol (simple inc)
-		//sol[ution] is objs with
-		//	Person's index in `personnel` as key and
-		//	val as list of services in 10 min incs
-		//		each service (list element) is itself a list [teach, svcat, stud] tuples
-		//			(use Service.toEntry())
-		solStacks = Array.from({ length: servs.length }, () => []);
-		subStacks = Array.from({ length: servs.length }, () => []);
-		
-		let sol = {};
-		for (let p=0; p<personnel.length; p++){
-			sol[p] = Array.from({ length: blocklabels.length }, () => []);
-		}
-		solStacks[0].push([sol,0]);
-		
-		function sol2Str(sl){
-			let ret = "";
-			for (let p=0; p<personnel.length; p++){
-				ret += sl[p].map(row => row.join(',')).join('\n');
-			}
-			return ret;
-		}
-		
-		SOLS = []; //complete solutions! :D
-		SUBS = []; //complete, but suboptimal solutions
-		let opts = 0; //just curious: stat of how many options are explored
-		
-		staxMax = [0,0,0];
-		
-		//use `const deepCopy = structuredClone(original);` to copy sol objs!
-		while(true){
-			//get current highest pi
-			if(SOLS.length > 0)
-				break; //SOLUTION FOUND!! :D
-			let pi = 0;
-			if (solStacks[2].length > 0)
-				pi = 2;
-			else if (solStacks[1].length > 0)
-				pi = 1;
-			const lastpi = pi == servs.length-1;
-			
-			//TEMP record stats...
-			for(let i=0; i<3; i++){
-				if (solStacks[i].length == 0)
-					continue;
-				staxMax[i] = Math.max(staxMax[i], solStacks[i].at(-1)[1]);
-			}
-			opts++;
-			//TEMP ^
-			
-			//FIXED: moved to top of loop, because bottom doesn't have next pi.
-			//when solStacks[pi] is empty AND we're desperate (no sols in next pi or SOLS, where approp.):
-			//then copy over the top suboptimal solution and keep going
-			if (((!lastpi && solStacks[pi+1].length == 0) || (lastpi && SOLS.length == 0)) &&
-				solStacks[pi].length == 0 && subStacks[pi].length > 0){
-				solStacks[pi].push(subStacks[pi].pop()); //move top suboptimal to sol
-			}
-			
-			//pop solution stack
-			if(solStacks[pi].length == 0){
-				console.log(solStacks);
-				console.log(subStacks);
-				throw new Error("solStacks[pi].length == 0");
-			}
-			let [sol, next_i] = solStacks[pi].pop();
-			
-			const lastserv = next_i == servs[pi].length-1;
-			const curr = servs[pi][next_i];
-			console.log("Fitting",pi,next_i,":",curr);
-			
-			curr.tries++;
-			if (curr.tries > 100){
-				console.log("Giving up on:",curr);
-				console.log("Moving on to:",next_i+1);
-				
-				if (next_i+1 >= servs[pi].length){
-					next_i = 0;
-					pi++;
-				}
-				if (pi >= servs.length)
-					SOLS.push(sol);
-				else
-					solStacks[pi].push([sol,next_i+1]);
-				continue;
-			}
-			if(staxMax[pi] == next_i) console.log("Fitting",pi,next_i,":",curr);
-			if(staxMax[pi] == next_i) console.log(solStacks[pi].length,"left");
-			
-			let anyopt = false;
-			let anysub = false;
-			
-			for(let tup of findAllFits(sol,curr)){
-				const [p,t,fit] = tup;
-				const solCopy = structuredClone(sol);
-				
-				let tleft = curr.time;
-				let st = t;
-				do{
-					solCopy[p][st].push(curr.toEntry());
-					tleft -= 10;
-					st++;
-				}while(tleft > 0);
-				
-				
-				if(staxMax[pi] == next_i) console.log("\tpfit found: ",p,t,solCopy[p][t].length);
-				
-				if (fit > 0){ //optimal
-					anyopt = true;
-					if(!lastserv){
-						solStacks[pi].push([solCopy,next_i+1]);
-					}
-					else if (!lastpi){
-						solStacks[pi+1].push([solCopy,0]);
-					}
-					else{
-						SOLS.push(solCopy);
-					}
-				}
-				else { //suboptimal
-					anysub = true;
-					if(!lastserv){
-						subStacks[pi].push([solCopy,next_i+1]);
-					}
-					else if (!lastpi){
-						subStacks[pi+1].push([solCopy,0]);
-					}
-					else{
-						SUBS.push(solCopy);
-					}
-				}
-			}
-			
-			//TODO: revisit?
-			if(!anyopt && anysub){ //no opt found, but 1+ sub was, so treat one sub as opt ("best we've got")
-				solStacks[pi].push(subStacks[pi].pop());
-			}
-			
-			//TODO: Try splitting Services!
-			//AFTER: add ALL split-up versions of this service to the suboptimal stack (right??)
-			//	create a solCopy, call curr.split(), try to fit each 10 minute split-Serv in...? BUT THE OPTIONS?!!!??!
-			
-			
-		}
-		
-		console.log("Considered",opts,"options");
-		
+		solveServices(Kservs, emptySol());
+		if(SOLS.length == 0)
+			throw new Error("Couldn't complete Kinder schedule before moving on to non-Kinder");
+		const KCopy = structuredClone(SOLS[0]);
+		solveServices(servs, KCopy);
+		ready = true;
 	} catch (error) {
         console.error('Error generating schedule:', error);
         alert('There was a problem generating the schedule.');
@@ -1226,6 +1243,8 @@ async function generateSchedule() {
 		}
 		return false;
 	}
+	
+	if (!ready) return;
 	
 	const sol = SOLS[0]; //TODO: revisit? More possible solutions as sheets in the excel??
 	
