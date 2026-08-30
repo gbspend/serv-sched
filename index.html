@@ -462,7 +462,7 @@ class Service {
 	
 	toEntry(){
 		//including grade for overlap purposes; don't need to include that in final output
-		return [this.grade, this.teacher, this.cat, this.name];
+		return [this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Svc" : "Ins"];
 	}
 }
 
@@ -566,6 +566,8 @@ function getPersonnel() {
             }
         });
 
+		if (checkedGrades.length == 0)
+			throw new Error(name+" doesn't have any grade levels enabled!");
         people.push(new Person(name, isIA, checkedGrades));
     });
 
@@ -618,6 +620,21 @@ function solDiff(a, b) {
     }
 
     return differences;
+}
+
+function entry2Str(e){
+	let temp = e.slice(1,-1); //temp has [teacher,serv_cat,name]
+	temp[1]+=" "+e[4];
+	return temp.join(", ");
+}
+
+//take raw sol[p][t] list and raw Service.toEntry() and checks if the list contains that entry
+function persTimeHasEntry(pt, e){
+	for(let pte of pt){
+		if (entry2Str(pte) == entry2Str(pt))
+			return true;
+	}
+	return false;
 }
 
 function parseGrade(s){
@@ -721,15 +738,20 @@ function validOverlap(others, s){
 	return true;
 }
 
-//"for the given sol[ution] does Service s fit in Person p's schedule at the time slot starting with index t?"
+//"for the given sol[ution] does Service s fit in Person with index p's schedule at the time slot starting with index t?"
 //  call AFTER checking masterFit
 // returns:
 //		-1: doesn't fit
 //		0: suboptimal fit
 //		1: optimal fit
 function personFit(sol,s,p,t){
-	//remember, sometimes can share ("overlap")! in fact, it's preferred!
 	const person = personnel[p];
+	
+	//HARDCODE: Becca can't go to Kelly (she said "pull out from Kelly wouldn't happen" /shrug)
+	if(person.name.includes("Spendlove") && s.teacher.includes("Kelly"))
+		return -1;
+	
+	
 	if (!s.isSupport && person.isIA)
 		return -1;
 	
@@ -744,8 +766,19 @@ function personFit(sol,s,p,t){
 	//check if person is available for duration of service
 	let tleft = s.time;
 	do{
-		if(sol[p][t].includes(s.toEntry())) //if this person already has this service: then no
+		
+		//if this person already has this service: then no
+		if(persTimeHasEntry(sol[p][t],s.toEntry()))
 			return -1;
+			
+		//New rule: if another Person is serving teacher, then this Person can't serve same teacher
+		for(let op=0; op<personnel.length; op++){
+			if (op == p) continue; //all OTHER personnel
+			//only need to check sol[op][t][0] because all entries will be same teacher
+			if(sol[op][t].length > 0 && sol[op][t][0][1] == s.teacher)
+				return -1;
+		}
+		
 		if(sol[p][t].length > 0){ //already busy, so can only overlap
 			if(!validOverlap(sol[p][t],s))
 				return -1;
@@ -765,7 +798,8 @@ function personFit(sol,s,p,t){
 //	fit is 0 for sub, 1 for opt (as above)
 function findAllFits(sol,curr){
 	let ret = [];
-	for (let t=0; t<blocklabels.length; t++){
+	//FIXED: go backwards so that earlier times are on top of stack
+	for (let t=blocklabels.length-1; t>=0; t--){
 		const mfit = masterFit(curr,t);
 		if(mfit < 0){ //just doesn't fit
 			continue;
@@ -808,7 +842,7 @@ async function generateSchedule() {
         // Load the Personnel UI into a list of Person objects.
         personnel = getPersonnel();
 		
-		
+		/*
 		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
 		personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] },
 		/*
@@ -817,9 +851,10 @@ async function generateSchedule() {
 		{ "name": "TEMP3", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
 		{ "name": "TEMP4", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
 		{ "name": "TEMP5", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
-		*/
+		/
 		]
 		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
+		*/
 
         console.log('Schedule data:', schedData);
         console.log('Services data:', servData);
@@ -1152,7 +1187,7 @@ async function generateSchedule() {
 		for(let p of Object.keys(sol)){
 			for(let l of sol[p]){
 				for(let le of l){
-					if (le.join() == e.join())
+					if (entry2Str(le) == entry2Str(e))
 						return true;
 				}
 			}
@@ -1173,6 +1208,34 @@ async function generateSchedule() {
 		}
 		console.log(miss);
 	}
+	
+	//prep data
+	const row1 = [""];
+	for (let p of personnel){
+		row1.push(p.name);
+	}
+	const data = [row1];
+	const sol = SOLS[0];
+	for(let i=0; i<blocklabels.length;i++){
+		const row = [blocklabels[i]];
+		for(let p of Object.keys(sol)){
+			let entries = [];
+			const l = sol[p][i];
+			for(let le of l){
+				entries.push(entry2Str(le));
+			}
+			row.push(entries.join("; "));
+		}
+		data.push(row);
+	}
+	
+	//TEMP: direct download
+	const workbook = XLSX.utils.book_new();
+	const worksheet = XLSX.utils.aoa_to_sheet(data);
+	XLSX.utils.book_append_sheet(workbook, worksheet, "Sheet1");
+
+	// Triggers an automatic browser download
+	XLSX.writeFile(workbook, "UserData.xlsx");
 	
 	//write `out` to spreadsheet
 	//display download button

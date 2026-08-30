@@ -35,7 +35,7 @@ Spreadsheets:
 		- SE (pull out)
 			- Not a lot of pull out, so if it doesn't exist: use soc stud / science pull out first, but can fall back to "<any>; pull out"
 		- Students in same grade they can have pull out service at the same times
-		- Alternatively, if two students in same grade and the same class have same push in service, they can be at same time
+		- Alternatively, if two students in same grade and the same class have push in services, they can be at same time
 		- Behavior category counts for "same service"
 	- Time (in minutes): Find chunk of that size (in master calendar) where that much time will fit
 
