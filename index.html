@@ -880,11 +880,21 @@ function servComp(a,b){
 //gen solution for given list of services, starting with `sol` (emptySol())
 //	DOESN'T RETURN: clears and fills SOLS (and SUBS)
 function solveServices(inservs, sol){
+	SOLS = []; //complete solutions! :D
+	SUBS = []; //complete, but suboptimal solutions
+	
 	//sort servs here
 	const servs = [];
+	let anyservs = false;
 	for (let pl of inservs){
+		if (pl.length>0) anyservs = true;
 		pl.sort(servComp);
 		servs.push(pl);
+	}
+	
+	if (!anyservs){
+		SOLS = [sol];
+		return;
 	}
 	
 	//each entry is a stack of [sol, next_i] tuples (for the priority matching list index)
@@ -907,8 +917,6 @@ function solveServices(inservs, sol){
 		return ret;
 	}
 	
-	SOLS = []; //complete solutions! :D
-	SUBS = []; //complete, but suboptimal solutions
 	let opts = 0; //just curious: stat of how many options are explored
 	
 	staxMax = [0,0,0];
