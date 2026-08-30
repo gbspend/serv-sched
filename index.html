@@ -810,7 +810,15 @@ async function generateSchedule() {
 		
 		
 		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
-		personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] }]
+		personnel = [ { "name": "Spendlove", "isIA": false, "grades": [ 2, 4, 5 ] }, { "name": "Wheeler", "isIA": false, "grades": [ 0, 1, 3 ] }, { "name": "Reid", "isIA": true, "grades": [ 4, 5 ] }, { "name": "Harrup", "isIA": true, "grades": [ 1, 2, 3 ] }, { "name": "Givens", "isIA": true, "grades": [ 0 ] },
+		/*
+		{ "name": "TEMP1", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+		{ "name": "TEMP2", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+		{ "name": "TEMP3", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+		{ "name": "TEMP4", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+		{ "name": "TEMP5", "isIA": true, "grades": [ 0,1,2,3,4,5 ] },
+		*/
+		]
 		//!!! TEMP REMOVE !!!!!!!!!!!!!!!!!!!!!!!!
 
         console.log('Schedule data:', schedData);
@@ -1007,8 +1015,6 @@ async function generateSchedule() {
 		SUBS = []; //complete, but suboptimal solutions
 		let opts = 0; //just curious: stat of how many options are explored
 		
-		const seensols = new Set();
-		
 		staxMax = [0,0,0];
 		
 		//use `const deepCopy = structuredClone(original);` to copy sol objs!
@@ -1047,18 +1053,6 @@ async function generateSchedule() {
 				throw new Error("solStacks[pi].length == 0");
 			}
 			let [sol, next_i] = solStacks[pi].pop();
-			
-			/*
-			CAN'T SKIP SEEN BEFORE IF WE'RE GIVING UP ON SERVS!!
-			//have I seen this solution before?
-			const ss = sol2Str(sol);
-			if (seensols.has(ss)){
-				//throw new Error("Already saw this sol! "+seensols.size);
-				console.log("INFO: Already saw this sol! "+seensols.size);
-				continue;
-			}
-			seensols.add(ss);
-			*/
 			
 			const lastserv = next_i == servs[pi].length-1;
 			const curr = servs[pi][next_i];
@@ -1154,7 +1148,31 @@ async function generateSchedule() {
 	
 	console.log(SOLS);
 	
-	//TODO: for each SOL, find which services were skipped (must do post-hoc)
+	function solHasE(sol,e){
+		for(let p of Object.keys(sol)){
+			for(let l of sol[p]){
+				for(let le of l){
+					if (le.join() == e.join())
+						return true;
+				}
+			}
+		}
+		return false;
+	}
+	
+	for(let sol of SOLS){
+		console.log(sol);
+		let miss = [];
+		for(let k of Object.keys(servs)){
+			for(let s of servs[k]){
+				let e = s.toEntry();
+				let found = false;
+				if (!solHasE(sol,e))
+					miss.push(s);
+			}
+		}
+		console.log(miss);
+	}
 	
 	//write `out` to spreadsheet
 	//display download button
