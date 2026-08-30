@@ -414,6 +414,42 @@ class Service {
 		this.time = time;
 	}
 	
+	//use service grade (and teacher if necessary) to get correct sched from masterSched
+	getSched(){
+		let sched = null;
+		let k = this.grade;
+		if (Object.hasOwn(masterSched,k)){
+			sched = masterSched[k];
+		}
+		else{
+			k += "; "+this.teacher;
+			if (Object.hasOwn(masterSched,k)){
+				sched = masterSched[k];
+			}
+			else{
+				throw new Error("Service class/teacher not in master schedule: "+s.toEntry());
+			}
+		}
+		return sched;
+	}
+	
+	//return list of Service objects that are this Service split into 10 minute times
+	split(){
+		const ret = [];
+		for(let i=0; i<this.time; i+=10){
+			ret.push(new this.constructor(
+				this.name,
+				this.grade,
+				this.teacher,
+				this.cat,
+				this.isSupport,
+				this.isPushIn,
+				10
+			));
+		}
+		return ret;
+	}
+	
 	getPriority(){
 		if (this.cat == "Resource" || this.cat == "Recess" || this.cat.startsWith("Trans"))
 			return 0;
@@ -434,7 +470,7 @@ let personnel;
 
 
 let blocklabels;
-let mastSched; //processed from schedData
+let masterSched; //processed from schedData
 let servs; //processed from servData
 let solStacks; // list of stacks of potential solutions (one for each priority)
 //sol(ution) is object:
@@ -446,7 +482,7 @@ let subStacks; // list of stacks of suboptimal possible solutions (one for each 
 //usage: add to this stack when sub optimal option comes up
 //		 if solStack is empty and subStack isn't; pop subStack and push that sol onto solStack
 
-//-------------------------------------------
+//----------------------------------------------------------------------------------------------------
 
 const personnelRows = document.querySelector('.personnel-rows');
 const schedInput = document.getElementById('schedin');
@@ -552,6 +588,8 @@ function readExcelFile(file) {
     });
 }
 
+//----------------------------------------------------------------------------------------------------
+
 function parseGrade(s){
 	let g = s[0].toUpperCase();
 	if (g == "K") g = "0";
@@ -562,6 +600,8 @@ function roundUp(num){
 	return Math.ceil(num / 10) * 10;
 }
 
+const NONBEHAV = new Set(["Resource","Recess","Lunch",""]);
+
 //"does Service s fit in the master schedule at the time slot starting with index t?"
 //  NO EXCEPTIONS, NO SPLIT (do that elsewhere)
 // returns:
@@ -569,16 +609,51 @@ function roundUp(num){
 //		0: suboptimal fit
 //		1: optimal fit
 function masterFit(s,t){
+	const sched = s.getSched();
+	
+	let entry = sched[t];
+	let canPullOut = false;
+	const parts = entry.split(";");
+	if (parts.length > 1){
+		entry = parts[0].trim();
+		canPullOut = parts[1].includes("pull out");
+	}
+	
+	let catmatch = s.cat == entry || (s.cat == "Behavior" && !NONBEHAV.includes(entry));
+	if (s.cat.startsWith("Trans")){
+		const ttype = s.cat.split(" ")[1].trim().toLowerCase();
+		if (ttype.includes("recess")){
+			catmatch = entry == "Recess" && sched[t+1] != "Recess"; //the last 10 min block of recess
+		}
+		else if (ttype.includes("res_in")){
+			catmatch = entry != "Resource" && sched[t+1] == "Resource"; //the 10 min block BEFORE resource
+		}
+		else if (ttype.includes("res_out")){
+			catmatch = entry != "Resource" && sched[t-1] == "Resource"; //the 10 min block AFTER resource
+		}
+		else if (ttype.includes("begin")){
+			catmatch = t == 0;
+		}
+		else if (ttype.includes("end")){
+			catmatch = t == blocklabels.length-1;
+		}
+	}
+	
+	if (!catmatch)
+		return -1;
+	
+	return 1;
+	
 	return -1;
 }
 
-//"does Service s fit in Person p's schedule at the time slot starting with index t?"
+//"for the given sol[ution] does Service s fit in Person p's schedule at the time slot starting with index t?"
 //  call AFTER checking masterFit
 // returns:
 //		-1: doesn't fit
 //		0: suboptimal fit
 //		1: optimal fit
-function personFit(s,p,t){
+function personFit(sol, s,p,t){
 	//remember, sometimes can share ("overlap")! in fact, it's preferred!
 	return -1;
 }
@@ -618,84 +693,147 @@ async function generateSchedule() {
 		//when reading from sched, block is stored as next index in sched[grade] list,
 		//	so store the labels here:
 		//	blocklabels[i] is the label for sched[grade][i]
-		blocklabels = schedData.map(row => row[0]);
-		blocklabels.shift(); //removes empty "header" row, leaving only time labels
+		blocklabels = [];
+		for (let i=1; i<schedData.length; i++){
+			const row = schedData[i];
+			if(row === undefined || row[0] === undefined)
+				break;
+			blocklabels.push(row[0]);
+		}
 
 		//key is grade # (0=K)
 		//val is list of 10-min blocks in order
-		mastSched = {}
+		masterSched = {}
 		
-		
-		let classes = schedData[0].slice(1); //excl blank above time label
+		let classes = schedData[0].slice(2); //excl blank above time label and "K"
+		classes.unshift(0);
 		classes = classes.map(String);
 		for (let cls of classes){
 			cls = cls.trim();
 			if (cls.length > 0){
-				mastSched[cls] = [];
+				if (cls == "K") cls = 0; //huh, js object keys don't distinguish between int and Str /shrug
+				masterSched[cls] = [];
 			}
 		}
+		
+		const schedCats = new Set();
 		
 		for (let i=1; i<schedData.length; i++){
 			const row = schedData[i];
-			for (let j=1; j<row.length; j++){
-				cls = classes[j-1];
-				mastSched[cls].push(row[j]);
+			if (row.length == 0)
+				break;
+			for (let j=0; j<classes.length; j++){
+				const cls = classes[j];
+				let entry = row[j+1];
+				if (entry === undefined || entry == "Switch Classes") entry = "";
+				masterSched[cls].push(entry);
+				
+				const pre = entry.split(";")[0].trim();
+				schedCats.add(pre);
 			}
 		}
 		
-		console.log("Loaded master sched:",mastSched);
+		console.log("Loaded master sched:",masterSched);
 		
 		servs = [[],[],[]]; //list of "priority classes", which are lists of Service obj
+		const servcats = new Set(); //set of seen service categories, for validation
 		
 		for (let i=1; i<servData.length; i++){
 			const row = servData[i];
-			//console.log(row);
 			if (row.length == 0 || row[0].trim().length == 0) continue;
-			let time = roundUp(parseInt(row[7]));
-			const ts = [];
-			if (time <= 40){
-				ts.push(time);
-			}
-			else{
-				while(true){
-					if (time >= 60){
-						time -= 30;
-						ts.push(30);
-					}
-					else if (time == 50){
-						ts.push(30);
-						ts.push(20);
-						break;
-					}
-					else if (time == 40){
-						ts.push(20);
-						ts.push(20);
-						break;
-					}
-					else{
-						ts.push(time);
-						break;
-					}
+			
+			let cat = row[4];
+			if (cat.startsWith("Trans")){
+				let subcats = null;
+				const ttype = cat.split(" ")[1].trim().toLowerCase();
+				if (ttype.includes("recess")){
+					subcats = ["recess in"];
+				}
+				else if (ttype.includes("resource")){
+					subcats = ["res_in","res_out"];
+				}
+				else if (ttype.includes("begin")){
+					subcats = ["begin","end"];
+				}
+				for (let subcat of subcats){
+					//Service(name, grade, teacher, cat, isSupport, isPushIn, time)
+					const s = new Service(
+						row[0],
+						parseGrade(row[2]),
+						row[3],
+						"Transition "+subcat,
+						row[5].toUpperCase() == "SUPPORT",
+						row[9][0].toUpperCase() == "G",
+						10
+					);
+					const pi = s.getPriority();
+					servs[pi].push(s);
 				}
 			}
-			for (const t of ts){
-				//Service(name, grade, teacher, cat, isSupport, isPushIn, time)
-				const s = new Service(
-					row[0],
-					parseGrade(row[2]),
-					row[3],
-					row[4],
-					row[5].toUpperCase() == "SUPPORT",
-					row[9][0].toUpperCase() == "G",
-					t
-				);
-				
-				let pi = s.getPriority();
-				servs[pi].push(s);
+			else{
+				let time = roundUp(parseInt(row[7]));
+				const ts = [];
+				if (time <= 40){
+					ts.push(time);
+				}
+				else{
+					while(true){
+						if (time >= 60){
+							time -= 30;
+							ts.push(30);
+						}
+						else if (time == 50){
+							ts.push(30);
+							ts.push(20);
+							break;
+						}
+						else if (time == 40){
+							ts.push(20);
+							ts.push(20);
+							break;
+						}
+						else{
+							ts.push(time);
+							break;
+						}
+					}
+				}
+				for (const t of ts){
+					//Service(name, grade, teacher, cat, isSupport, isPushIn, time)
+					const s = new Service(
+						row[0],
+						parseGrade(row[2]),
+						row[3],
+						cat,
+						row[5].toUpperCase() == "SUPPORT",
+						row[9][0].toUpperCase() == "G",
+						t
+					);
+					if (!s.cat.startsWith("Trans") && !s.cat.startsWith("Behav")) //transitions and behavior don't appear on master sched
+						servcats.add(s.cat);
+					
+					const pi = s.getPriority();
+					servs[pi].push(s);
+				}
 			}
 		}
 		
 		console.log("Loaded services:",servs);
+		
+		//validate
+		if (!servcats.isSubsetOf(schedCats)){
+			const missing = servcats.difference(schedCats);
+			const msg = "Some service categories don't appear on master schedule: "+[...missing].join(', ');
+			alert("ERROR! "+msg);
+			throw new Error(msg);
+		}
+		console.log("Sched entries that aren't in service cats: ",schedCats.difference(servcats));
+		
+		for(let k of Object.keys(masterSched)){
+			if (masterSched[k].length != blocklabels.length){
+				throw new Error("sched "+k+" len != labels len: "+ masterSched[k].length+ " vs. "+ blocklabels.length);
+			}
+		}
 		
 		ready = true;
     } catch (error) {
@@ -727,40 +865,60 @@ async function generateSchedule() {
 		}
 		solStacks[0].push([sol,0]);
 		
+		function sol2Str(sl){
+			let ret = "";
+			for (let p=0; p<personnel.length; p++){
+				ret += sl[p].map(row => row.join(',')).join('\n');
+			}
+			return ret;
+		}
+		
 		const SOLS = []; //complete solutions! :D
 		const SUBS = []; //complete, but suboptimal solutions
 		let opts = 0; //just curious: stat of how many options are explored
 		
+		const seensols = new Set();
+		
 		//use `const deepCopy = structuredClone(original);` to copy sol objs!
 		for (let pi=0; pi<servs.length; pi++){
-			const lastpi = pi == servs.lenght-1;
+			const lastpi = pi == servs.length-1;
 			while(solStacks[pi].length > 0){
 				opts++; //stats
 				const [sol, next_i] = solStacks[pi].pop();
+				const ss = sol2Str(sol);
+				if (seensols.has(ss)){
+					throw new Error("Already saw this sol! "+seensols.length);
+				}
+				seensols.add(ss);
+				
+				
 				const lastserv = next_i == servs[pi].length-1; //IF LAST: ADD TO stack[pi+1]!! :D
 														   // unless last pi; then you found a solution!
 				const curr = servs[pi][next_i];
-				for (let t=0; t<mastSched.length; t++){
+				//console.log("Fitting",pi,next_i,":",curr);
+				//console.log(solStacks[pi].length,"left");
+				for (let t=0; t<blocklabels.length; t++){
 					const mfit = masterFit(curr,t);
+					//console.log("\tmfit: ",mfit);
 					if(mfit < 0){ //just doesn't fit
 						continue;
 					}
 					
 					for (let p=0; p<personnel.length; p++){
-						const pfit = personFit(curr,personnel[p],t);
+						const pfit = personFit(sol,curr,p,t);
 						if (pfit < 0){
 							continue;
 						}
-						
 						const solCopy = structuredClone(sol);
 						solCopy[p][t].push(curr.toEntry());
+						//console.log("\tpfit found: ",p,t,solCopy[p][t].length);
 						
 						if (mfit > 0 && pfit > 0){ //optimal
 							if(!lastserv){
 								solStacks[pi].push([solCopy,next_i+1]);
 							}
 							else if (!lastpi){
-								solStacks[pi+1].push([solCopy,next_i+1]);
+								solStacks[pi+1].push([solCopy,0]);
 							}
 							else{
 								SOLS.push(solCopy);
@@ -771,7 +929,7 @@ async function generateSchedule() {
 								subStacks[pi].push([solCopy,next_i+1]);
 							}
 							else if (!lastpi){
-								subStacks[pi+1].push([solCopy,next_i+1]);
+								subStacks[pi+1].push([solCopy,0]);
 							}
 							else{
 								SUBS.push(solCopy);
@@ -780,18 +938,24 @@ async function generateSchedule() {
 					}
 				}
 				
+				//AFTER: add ALL split-up versions of this service to the suboptimal stack (right??)
+				//	create a solCopy, call curr.split(), try to fit each 10 minute split-Serv in...? BUT THE OPTIONS?!!!??!
+				
+				
 				//when solStacks[pi] is empty AND we're desperate (no sols in next pi or SOLS, where approp.):
 				//then copy over the top suboptimal solution and keep going
 				if (((!lastpi && solStacks[pi+1].length == 0) || (lastpi && SOLS.length == 0)) &&
 					solStacks[pi].length == 0 && subStacks[pi].length > 0){
 					solStacks[pi].push(subStacks[pi].pop()); //move top suboptimal to sol
 				}
+				
+				//TODO: reconsider whether I should dig into subStacks[pi] even if I'm not desperate...
 			}
 			
 			//when moving to next pi:
 			//	solStacks[new_pi] will be populated
-			//	IGNORE subStacks[old_pi] for now (optimistic)
-			//		If I do decide to use it, do I need to think about subStack[old_pi]'s order...?
+			//	subStacks[new_pi] will also (likely) be populated, so
+			//		MUST IGNORE subStacks[old_pi]---they're incomplete!!
 		}
 		
 		console.log("Considered",opts,"options");
