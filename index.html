@@ -602,14 +602,10 @@ function roundUp(num){
 
 const NONBEHAV = new Set(["Resource","Recess","Lunch",""]);
 
-//"does Service s fit in the master schedule at the time slot starting with index t?"
-//  NO EXCEPTIONS, NO SPLIT (do that elsewhere)
-// returns:
-//		-1: doesn't fit
-//		0: suboptimal fit
-//		1: optimal fit
-function masterFit(s,t){
+function singleTFit(s,t){
 	const sched = s.getSched();
+	
+	let ret = 1;
 	
 	let entry = sched[t];
 	let canPullOut = false;
@@ -618,6 +614,9 @@ function masterFit(s,t){
 		entry = parts[0].trim();
 		canPullOut = parts[1].includes("pull out");
 	}
+	
+	if (!s.isPushIn && !canPullOut) //pull out service requires pull out time
+		return -1;
 	
 	let catmatch = s.cat == entry || (s.cat == "Behavior" && !NONBEHAV.includes(entry));
 	if (s.cat.startsWith("Trans")){
@@ -639,12 +638,37 @@ function masterFit(s,t){
 		}
 	}
 	
-	if (!catmatch)
+	if (!s.isPushIn && canPullOut){
+		if (!catmatch && !entry.includes("Science") && !entry.includes("Social")){
+			ret = 0;
+		}
+	}
+	else if (!catmatch)
 		return -1;
 	
-	return 1;
+	return ret;
 	
-	return -1;
+}
+//"does Service s fit in the master schedule at the time slot starting with index t?"
+//  NO EXCEPTIONS, NO SPLIT (do that elsewhere)
+// returns:
+//		-1: doesn't fit
+//		0: suboptimal fit
+//		1: optimal fit
+function masterFit(s,t){
+	let ret = 1;
+	let tleft = s.time;
+	do{
+		const singFit = singleTFit(s,t);
+		if (singFit < 0)
+			return -1;
+		if (singFit < ret)
+			ret = singFit;
+		tleft -= 10;
+		t++;
+	}while(tleft > 0);
+	
+	return ret;
 }
 
 //"for the given sol[ution] does Service s fit in Person p's schedule at the time slot starting with index t?"
@@ -653,9 +677,14 @@ function masterFit(s,t){
 //		-1: doesn't fit
 //		0: suboptimal fit
 //		1: optimal fit
-function personFit(sol, s,p,t){
+function personFit(sol,s,p,t){
 	//remember, sometimes can share ("overlap")! in fact, it's preferred!
-	return -1;
+	
+	//TEMP FOR TESTING
+	if(p==0 && t < 34 && sol[p][t].length < 1)
+		return 1;
+	else
+		return -1;
 }
 
 async function generateSchedule() {
@@ -877,20 +906,12 @@ async function generateSchedule() {
 		const SUBS = []; //complete, but suboptimal solutions
 		let opts = 0; //just curious: stat of how many options are explored
 		
-		const seensols = new Set();
-		
 		//use `const deepCopy = structuredClone(original);` to copy sol objs!
 		for (let pi=0; pi<servs.length; pi++){
 			const lastpi = pi == servs.length-1;
 			while(solStacks[pi].length > 0){
 				opts++; //stats
 				const [sol, next_i] = solStacks[pi].pop();
-				const ss = sol2Str(sol);
-				if (seensols.has(ss)){
-					throw new Error("Already saw this sol! "+seensols.length);
-				}
-				seensols.add(ss);
-				
 				
 				const lastserv = next_i == servs[pi].length-1; //IF LAST: ADD TO stack[pi+1]!! :D
 														   // unless last pi; then you found a solution!
