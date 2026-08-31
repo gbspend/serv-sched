@@ -1358,6 +1358,9 @@ function tryEject(sol, place, m, depth, locked){
 			if (blockers === null) continue;
 			if (blockers.length === 0 || blockers.length > EJECT_MAX_BLOCKERS) continue;
 			if (blockers.some(b => locked.has(b))) continue;
+			//never displace a higher-priority service (locked cat < instruction < support)
+			//to make room for a lower-priority one
+			if (blockers.some(b => b.getPriority() < m.getPriority())) continue;
 
 			const snap = snapshot(sol, place);
 			for (const b of blockers) undoPlacement(sol, place, b);
@@ -1439,7 +1442,7 @@ async function generateSchedule() {
 		
         // Load the Personnel UI into a list of Person objects.
 		
-		if (false){ // change to false for DEBUG personnel
+		if (true){ // change to false for DEBUG personnel
         personnel = getPersonnel();
 		}
 		else{
