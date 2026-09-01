@@ -1047,6 +1047,12 @@ function solveServices(inservs, sol){
 		let [sol, next_i] = solStacks[pi].pop();
 		
 		const lastserv = next_i == servs[pi].length-1;
+		
+		while(servs[pi].length == 0)
+			pi++;
+			if (pi >= servs.length)
+				return sol;
+		
 		const curr = servs[pi][next_i];
 		//console.log("Fitting",pi,next_i,":",curr);
 		
