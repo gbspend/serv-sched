@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8">
@@ -344,7 +344,7 @@ Generate Schedule
 
 <div id="results">
 <div class="personnel-rows">
-		<b>&#x26A0;&#xFE0F;The following services couldn't fit in the schedule:</b>
+		<b>⚠️ The following services couldn't fit in the schedule:</b>
         <ul id="missing-ul">
 		<li>Excluded Service</li>
 		<li>Excluded Service</li>
@@ -387,6 +387,7 @@ class Service {
 		this.isSupport = isSupport;
 		this.isPushIn = isPushIn;
 		this.time = time;
+		this.tries = 0;
 	}
 	
 	//use service grade (and teacher if necessary) to get correct sched from masterSched
@@ -402,7 +403,7 @@ class Service {
 				sched = masterSched[k];
 			}
 			else{
-				throw new Error("Service class/teacher not in master schedule: "+this.toEntry());
+				throw new Error("Service class/teacher not in master schedule: "+s.toEntry());
 			}
 		}
 		return sched;
@@ -448,7 +449,6 @@ let personnel;
 let blocklabels;
 let masterSched; //processed from schedData
 let servs; //processed from servData
-let Kservs; //processed from servData
 let solStacks; // list of stacks of potential solutions (one for each priority)
 //sol(ution) is object:
 //	key is Person's index in `personnel` (one for each)
@@ -574,73 +574,27 @@ function readExcelFile(file) {
 
 //----------------------------------------------------------------------------------------------------
 
-// --- Search randomization + diversity (used by solveServices) -----------------
-
-const SEARCH_SEED = 0x9E3779B9;   // fixed => deterministic output for identical inputs
-const DIVERSITY_MIN_CELLS = 4;    // min differing (person,block) cells for two SOLS to count as distinct
-const SEARCH_MAX_OPTS = 400000;   // soft cap on explored options once >=1 schedule exists
-const SEARCH_MAX_MS = 20000;      // soft wall-clock cap once >=1 schedule exists
-const SEARCH_HARD_OPTS = 1000000; // absolute backstop against an infinite loop
-
-// --- Constraint-aware constructor (MRV/LCV) + ejection-chain repair ----------
-const LCV_PROBE_LIMIT  = 12;   // how many remaining services to weigh when scoring a slot
-const LCV_FIT_LIMIT    = 10;   // how many candidate slots to score per service
-const LCV_OPT_BONUS    = 5;    // reward a non-suboptimal placement
-const LCV_ADJ_BONUS    = 2;    // reward placements that don't fragment a person's free time
-const LCV_GRADE_BONUS  = 3;    // reward giving a service to someone assigned that grade
-const EJECT_DEPTH      = 2;    // how deep the repair chain may displace services
-const EJECT_MAX_BLOCKERS = 4;  // skip a slot whose chain would have to move more than this
-const REPAIR_MAX_ITERS = 4;    // repair sweeps over the miss list
-const KBASE_LIMIT      = 2;    // distinct Kinder bases to build non-Kinder schedules on
-
-let searchSeed = SEARCH_SEED;
-function srand() {
-    // mulberry32 PRNG
-    searchSeed |= 0;
-    searchSeed = (searchSeed + 0x6D2B79F5) | 0;
-    let t = Math.imul(searchSeed ^ (searchSeed >>> 15), 1 | searchSeed);
-    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
-    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
-}
-function shuffle(arr) {
-    for (let i = arr.length - 1; i > 0; i--) {
-        const j = Math.floor(srand() * (i + 1));
-        [arr[i], arr[j]] = [arr[j], arr[i]];
-    }
-    return arr;
-}
-
-// stable string key for one sol[p][t] cell (a list of Service.toEntry() tuples)
-function blockKey(cell) {
-    return cell.map(e => e.join('|')).sort().join(' / ');
-}
-
-// list of "person@block" cells where solutions a and b disagree (a real distance metric)
 function solDiff(a, b) {
     const differences = [];
+
     for (const key of Object.keys(a)) {
-        const aRow = a[key] || [];
-        const bRow = b[key] || [];
-        const n = Math.max(aRow.length, bRow.length);
-        for (let t = 0; t < n; t++) {
-            const av = blockKey(aRow[t] || []);
-            const bv = blockKey(bRow[t] || []);
-            if (av !== bv) {
-                differences.push(`${key}@${t}: "${av}" -> "${bv}"`);
+        const aValues = new Set(a[key]);
+        const bValues = new Set(b[key]);
+
+        for (const value of bValues) {
+            if (!aValues.has(value)) {
+                differences.push(`${key}: added "${value}"`);
+            }
+        }
+
+        for (const value of aValues) {
+            if (!bValues.has(value)) {
+                differences.push(`${key}: removed "${value}"`);
             }
         }
     }
-    return differences;
-}
 
-// is `cand` far enough from every already-accepted solution to count as a distinct schedule?
-function isDiverse(cand, accepted) {
-    for (const s of accepted) {
-        if (solDiff(cand, s).length < DIVERSITY_MIN_CELLS) {
-            return false;
-        }
-    }
-    return true;
+    return differences;
 }
 
 function entry2Str(e){
@@ -672,8 +626,6 @@ function decodeTran(cat){
 	else if(ttype.includes("begin") || ttype.includes("end")){
 		return "Transition begin/end day";
 	}
-	else
-		throw new Error("Invalid Transition type:",ttype);
 }
 
 //toEntry() -> [this.grade, this.teacher, this.cat, this.name, this.isSupport ? "Sup" : "Ins"]
@@ -698,7 +650,7 @@ function entriesOutStr(l){
 //take raw sol[p][t] list and raw Service.toEntry() and checks if the list contains that entry
 function persTimeHasEntry(pt, e){
 	for(let pte of pt){
-		if (entry2Str(pte) == entry2Str(e))
+		if (entry2Str(pte) == entry2Str(pt))
 			return true;
 	}
 	return false;
@@ -718,11 +670,9 @@ const NONBEHAV = new Set(["Resource","Recess","Lunch",""]);
 
 function singleTMasterFit(s,t){
 	const sched = s.getSched();
-
-	if (t < 0 || t >= sched.length) return -1; //off the end of the day
-
+	
 	let ret = 1;
-
+	
 	let entry = sched[t];
 	let canPullOut = false;
 	const parts = entry.split(";");
@@ -876,21 +826,16 @@ function personFit(sol,s,p,t){
 //	person is index into Personnel
 //	time is index into masterSched/sol[p]
 //	fit is 0 for sub, 1 for opt (as above)
-function findAllFits(sol,curr,doShuffle=true){
+function findAllFits(sol,curr){
 	let ret = [];
-	//randomize which Person is considered first so repeated searches spread work
-	//across different people (keeps the time ordering below intact)
-	const porder = [];
-	for (let p=0; p<personnel.length; p++) porder.push(p);
-	if (doShuffle) shuffle(porder);
 	//FIXED: go backwards so that earlier times are on top of stack
 	for (let t=blocklabels.length-1; t>=0; t--){
 		const mfit = masterFit(curr,t);
 		if(mfit < 0){ //just doesn't fit
 			continue;
 		}
-
-		for (const p of porder){
+		
+		for (let p=0; p<personnel.length; p++){
 			const pfit = personFit(sol,curr,p,t);
 			if (pfit < 0){
 				continue;
@@ -922,8 +867,8 @@ function servComp(a,b){
 		return -1;
 	
 	const sol = emptySol();
-	const afits = findAllFits(sol,a,false).length;
-	const bfits = findAllFits(sol,b,false).length;
+	const afits = findAllFits(sol,a).length;
+	const bfits = findAllFits(sol,b).length;
 	if (afits == bfits)
 		return 0;
 	else if (afits > bfits)
@@ -935,15 +880,9 @@ function servComp(a,b){
 //gen solution for given list of services, starting with `sol` (emptySol())
 //	DOESN'T RETURN: clears and fills SOLS (and SUBS)
 function solveServices(inservs, sol){
-	SOLS = []; //complete solutions found (raw, before the diversity filter below)
+	SOLS = []; //complete solutions! :D
 	SUBS = []; //complete, but suboptimal solutions
-
-	searchSeed = SEARCH_SEED;   //deterministic run
-	const acceptedSOLS = [];    //curated: each is a distinct schedule (see isDiverse)
-	const nearDupSOLS = [];     //complete but too similar to an accepted one (fallback only)
-	let vetted = 0;             //how many of SOLS have been diversity-checked so far
-	const startMs = performance.now();
-
+	
 	//sort servs here
 	const servs = [];
 	let anyservs = false;
@@ -967,11 +906,7 @@ function solveServices(inservs, sol){
 	//			(use Service.toEntry())
 	solStacks = Array.from({ length: servs.length }, () => []);
 	subStacks = Array.from({ length: servs.length }, () => []);
-
-	//per-service attempt budget; reset whenever a full solution is found so later
-	//solutions aren't starved by exploration spent on earlier ones
-	let triesArr = servs.map(pl => new Array(pl.length).fill(0));
-
+	
 	solStacks[0].push([sol,0]);
 	
 	function sol2Str(sl){
@@ -986,33 +921,13 @@ function solveServices(inservs, sol){
 	
 	staxMax = [0,0,0];
 	
-	let diffSOLS = 10; //collect this many + 1 distinct schedules, then stop
-
-	//classify newly-completed solutions: a solution that differs enough from the ones
-	//already accepted counts toward the "enough distinct schedules" stop condition.
-	//(all complete solutions stay in SOLS regardless â€” this only paces the search.)
-	function vetNewSOLS(){
-		triesArr = servs.map(pl => new Array(pl.length).fill(0)); //fresh budget per solution
-		for (; vetted < SOLS.length; vetted++){
-			if (isDiverse(SOLS[vetted], acceptedSOLS)){
-				acceptedSOLS.push(SOLS[vetted]);
-				diffSOLS--;
-			}
-			else
-				nearDupSOLS.push(SOLS[vetted]);
-		}
-	}
-
+	let diffSOLS = 10; //SOLS from different "origins"
+	
 	//use `const deepCopy = structuredClone(original);` to copy sol objs!
 	while(true){
 		//get current highest pi
 		if(diffSOLS < 0)
-			break; //enough distinct schedules found
-		if(SOLS.length > 0 &&
-			(opts > SEARCH_MAX_OPTS || (performance.now() - startMs) > SEARCH_MAX_MS))
-			break; //have at least one schedule and hit a soft budget
-		if(opts > SEARCH_HARD_OPTS)
-			break; //absolute backstop
+			break; //enough SOLUTION FOUND!! :D
 		let foundSOL = false; //one per sol
 		let pi = 0;
 		if (solStacks[2].length > 0)
@@ -1050,21 +965,21 @@ function solveServices(inservs, sol){
 		const curr = servs[pi][next_i];
 		//console.log("Fitting",pi,next_i,":",curr);
 		
-		triesArr[pi][next_i]++;
-		if (triesArr[pi][next_i] > 100){
-			//give up on this service for now: advance past it on this branch
-			let np = pi, ni = next_i + 1;
-			if (ni >= servs[np].length){ //was the last service of this priority
-				ni = 0;
-				np++;
+		curr.tries++;
+		if (curr.tries > 100){
+			//console.log("Giving up on:",curr);
+			//console.log("Moving on to:",next_i+1);
+			
+			if (next_i+1 >= servs[pi].length){
+				next_i = 0;
+				pi++;
 			}
-			if (np >= servs.length){
+			if (pi >= servs.length){
 				SOLS.push(sol);
 				foundSOL = true;
-				vetNewSOLS();
 			}
 			else
-				solStacks[np].push([sol,ni]); //FIX: previously pushed next_i+1, skipping service 0
+				solStacks[pi].push([sol,next_i+1]);
 			continue;
 		}
 		//if(staxMax[pi] == next_i) console.log("Fitting",pi,next_i,":",curr);
@@ -1073,9 +988,7 @@ function solveServices(inservs, sol){
 		let anyopt = false;
 		let anysub = false;
 		
-		//first complete solution uses the plain greedy person order; shuffling only
-		//kicks in once we have a baseline, so diversity never costs us the best pack
-		for(let tup of findAllFits(sol,curr,SOLS.length > 0)){
+		for(let tup of findAllFits(sol,curr)){
 			const [p,t,fit] = tup;
 			const solCopy = structuredClone(sol);
 			
@@ -1126,297 +1039,10 @@ function solveServices(inservs, sol){
 		//AFTER: add ALL split-up versions of this service to the suboptimal stack (right??)
 		//	create a solCopy, call curr.split(), try to fit each 10 minute split-Serv in...? BUT THE OPTIONS?!!!??!
 		
-		if(foundSOL) vetNewSOLS();
+		if(foundSOL) diffSOLS--;
 	}
-
-	//leave SOLS as the FULL pool of complete solutions; generateSchedule picks the
-	//one with the fewest misses. acceptedSOLS/nearDupSOLS only shaped how long we
-	//kept searching (until enough *distinct* schedules exist, or a cap is hit).
-	console.log("Considered",opts,"options;",SOLS.length,"solutions (",acceptedSOLS.length,"distinct )");
-}
-
-// ============================================================================
-// Constraint-aware constructor + repair
-//   greedySolve : most-constrained-service-first (MRV), least-constraining-slot (LCV)
-//   repairInPlace : ejection-chain local search that only ever lowers the miss count
-// A "place" map (Service object -> {p,t,span}) rides alongside the tuple-format
-// `sol` so pieces can be moved/undone without reconstructing Service data.
-// ============================================================================
-
-let masterStartCache = new Map(); //reset per generateSchedule run
-
-function entryKey(e){ return [e[1],e[2],e[3],e[4]].join(String.fromCharCode(1)); }
-
-//is toEntry() `e` present anywhere in solution `sol`?
-function solHasE(sol,e){
-	const k = entryKey(e);
-	for(const p of Object.keys(sol))
-		for(const cell of sol[p])
-			for(const le of cell)
-				if (entryKey(le) === k) return true;
-	return false;
-}
-
-//variance of per-person busy-block counts; lower => workload shared more evenly
-function loadImbalance(sol){
-	const loads = [];
-	for(const p of Object.keys(sol)){
-		let busy = 0;
-		for(const cell of sol[p]) if (cell.length > 0) busy++;
-		loads.push(busy);
-	}
-	if (loads.length === 0) return 0;
-	const mean = loads.reduce((a,b)=>a+b,0) / loads.length;
-	let v = 0;
-	for(const l of loads) v += (l-mean)*(l-mean);
-	return v / loads.length;
-}
-
-//services in `buckets` whose entry appears nowhere in `sol`
-function countMissesFlat(sol, buckets){
-	const out = [];
-	for (const k of Object.keys(buckets))
-		for (const s of buckets[k])
-			if (!solHasE(sol, s.toEntry())) out.push(s);
-	return out;
-}
-
-//distinct feasible start blocks for a service, cached (masterFit ignores the partial solution)
-function masterStarts(s){
-	const key = s.grade+'|'+s.cat+'|'+(s.isPushIn?1:0)+'|'+s.time;
-	let v = masterStartCache.get(key);
-	if (!v){
-		v = [];
-		for (let t=0; t<blocklabels.length; t++){
-			const q = masterFit(s, t);
-			if (q >= 0) v.push([t, q]);
-		}
-		masterStartCache.set(key, v);
-	}
-	return v;
-}
-
-//every (person,start) where `s` currently fits `sol`; q is 0 (suboptimal) or 1 (optimal)
-function findFits(sol, s){
-	const out = [];
-	for (const [t, qm] of masterStarts(s)){
-		for (let p=0; p<personnel.length; p++){
-			const pf = personFit(sol, s, p, t);
-			if (pf < 0) continue;
-			out.push({p, t, q: Math.min(qm, pf)});
-		}
-	}
-	return out;
-}
-
-function bestOf(fits){
-	let b = fits[0];
-	for (const f of fits) if (f.q > b.q) b = f;
-	return b;
-}
-
-function applyPlacement(sol, place, s, p, t){
-	const e = s.toEntry();
-	const span = Math.ceil(s.time/10);
-	for (let k=0;k<span;k++) sol[p][t+k].push(e);
-	place.set(s, {p, t, span});
-}
-
-function undoPlacement(sol, place, s){
-	const rec = place.get(s);
-	if (!rec) return;
-	const k0 = entryKey(s.toEntry());
-	for (let k=0;k<rec.span;k++){
-		const cell = sol[rec.p][rec.t+k];
-		for (let j=cell.length-1;j>=0;j--){
-			if (entryKey(cell[j]) === k0){ cell.splice(j,1); break; }
-		}
-	}
-	place.delete(s);
-}
-
-//score each candidate slot by how much placement freedom it leaves other services
-//(this is the "move it down so the other one fits" logic, made systematic)
-function pickLCV(sol, s, fits, remaining){
-	const cand  = fits.length > LCV_FIT_LIMIT ? fits.slice(0, LCV_FIT_LIMIT) : fits;
-	const probe = remaining.length > LCV_PROBE_LIMIT ? remaining.slice(0, LCV_PROBE_LIMIT) : remaining;
-	const e = s.toEntry();
-	const span = Math.ceil(s.time/10);
-
-	let best = fits[0], bestScore = -Infinity;
-	for (const f of cand){
-		for (let k=0;k<span;k++) sol[f.p][f.t+k].push(e);  //tentative
-		let freedom = 0;
-		for (const o of probe) freedom += findFits(sol, o.s).length;
-		for (let k=0;k<span;k++) sol[f.p][f.t+k].pop();    //undo
-
-		let score = freedom;
-		if (f.q === 1) score += LCV_OPT_BONUS;
-		const before = f.t > 0 && sol[f.p][f.t-1].length > 0;
-		const after  = f.t+span < blocklabels.length && sol[f.p][f.t+span].length > 0;
-		if (before || after) score += LCV_ADJ_BONUS;
-		if (personnel[f.p].grades.includes(s.grade)) score += LCV_GRADE_BONUS;
-
-		if (score > bestScore){ bestScore = score; best = f; }
-	}
-	return best;
-}
-
-//most-constrained-first / least-constraining-slot greedy build on top of `baseSol`
-function greedySolve(buckets, baseSol){
-	const sol = structuredClone(baseSol);
-	const place = new Map();
-	const missed = [];
-
-	//findFits only ever shrinks as the schedule fills, so cache it and drop entries
-	//touched by a placement (same person, or same teacher via the exclusivity rule)
-	const fitCache = new Map();
-	const cachedFits = s => {
-		let f = fitCache.get(s);
-		if (!f){ f = findFits(sol, s); fitCache.set(s, f); }
-		return f;
-	};
-
-	for (let pi=0; pi<buckets.length; pi++){
-		const remaining = buckets[pi].map(s => ({s}));
-
-		while (remaining.length){
-			//MRV: the service with the fewest placements available right now
-			let pick = 0, pickFits = cachedFits(remaining[0].s);
-			for (let i=1; i<remaining.length && pickFits.length>0; i++){
-				const f = cachedFits(remaining[i].s);
-				if (f.length < pickFits.length){ pick = i; pickFits = f; }
-			}
-			const chosen = remaining.splice(pick,1)[0].s;
-
-			if (pickFits.length === 0){ missed.push(chosen); continue; }
-
-			const c = pickLCV(sol, chosen, pickFits, remaining);
-			applyPlacement(sol, place, chosen, c.p, c.t);
-
-			fitCache.delete(chosen);
-			for (const {s} of remaining){
-				const f = fitCache.get(s);
-				if (!f) continue;
-				if (s.teacher === chosen.teacher || f.some(x => x.p === c.p))
-					fitCache.delete(s);
-			}
-		}
-	}
-	return {sol, place, missed};
-}
-
-function servicesCovering(place, p, t){
-	const out = [];
-	for (const [s, rec] of place)
-		if (rec.p === p && rec.t <= t && t < rec.t + rec.span) out.push(s);
-	return out;
-}
-
-//services that would have to move for `m` to occupy (p,t); null if a hard rule forbids it
-function blockersFor(sol, place, m, p, t){
-	const person = personnel[p];
-	if (!m.isSupport && person.isIA) return null;
-	if (person.name.includes("Spendlove") && m.teacher.includes("Kelly")) return null;
-
-	const span = Math.ceil(m.time/10);
-	const set = new Set();
-	for (let k=0;k<span;k++){
-		const tt = t+k;
-		if (tt >= blocklabels.length) return null;
-		for (const s of servicesCovering(place, p, tt)) set.add(s);
-		for (let op=0; op<personnel.length; op++){
-			if (op === p) continue;
-			for (const s of servicesCovering(place, op, tt))
-				if (s.teacher === m.teacher) set.add(s);
-		}
-	}
-	return [...set];
-}
-
-function snapshot(sol, place){
-	return {
-		sol: structuredClone(sol),
-		place: new Map([...place].map(([s,r])=>[s,{...r}]))
-	};
-}
-function restore(sol, place, snap){
-	for (const p of Object.keys(snap.sol))
-		for (let t=0;t<snap.sol[p].length;t++) sol[p][t] = snap.sol[p][t];
-	place.clear();
-	for (const [s,r] of snap.place) place.set(s, r);
-}
-
-//place `m` by displacing its blockers (and, up to `depth`, their blockers); all-or-nothing
-function tryEject(sol, place, m, depth, locked){
-	locked = locked || new Set();
-	locked.add(m);
-
-	for (const [t] of masterStarts(m)){
-		for (let p=0; p<personnel.length; p++){
-			const blockers = blockersFor(sol, place, m, p, t);
-			if (blockers === null) continue;
-			if (blockers.length === 0 || blockers.length > EJECT_MAX_BLOCKERS) continue;
-			if (blockers.some(b => locked.has(b))) continue;
-			//never displace a higher-priority service (locked cat < instruction < support)
-			//to make room for a lower-priority one
-			if (blockers.some(b => b.getPriority() < m.getPriority())) continue;
-
-			const snap = snapshot(sol, place);
-			for (const b of blockers) undoPlacement(sol, place, b);
-
-			if (personFit(sol, m, p, t) < 0){ restore(sol, place, snap); continue; }
-			applyPlacement(sol, place, m, p, t);
-
-			let ok = true;
-			for (const b of blockers){
-				const f = findFits(sol, b);
-				if (f.length){
-					const c = bestOf(f);
-					applyPlacement(sol, place, b, c.p, c.t);
-				}
-				else if (depth > 0 && tryEject(sol, place, b, depth-1, locked)){ /* rehomed deeper */ }
-				else { ok = false; break; }
-			}
-			if (ok) return true;
-			restore(sol, place, snap);
-		}
-	}
-	return false;
-}
-
-//local search: work the miss list down; every accepted move keeps or lowers the count
-function repairInPlace(g){
-	let changed = true, iter = 0;
-	while (changed && iter++ < REPAIR_MAX_ITERS){
-		changed = false;
-		for (let i=0; i<g.missed.length; i++){
-			const m = g.missed[i];
-			const direct = findFits(g.sol, m);
-			if (direct.length){
-				const c = bestOf(direct);
-				applyPlacement(g.sol, g.place, m, c.p, c.t);
-				g.missed.splice(i,1); i--; changed = true; continue;
-			}
-			if (tryEject(g.sol, g.place, m, EJECT_DEPTH)){
-				g.missed.splice(i,1); i--; changed = true; continue;
-			}
-		}
-	}
-}
-
-function solKey(sol){
-	return Object.keys(sol)
-		.map(p => sol[p].map(cell => blockKey(cell)).join('|'))
-		.join('#');
-}
-function dedupeSols(list){
-	const seen = new Set(), out = [];
-	for (const s of list){
-		const k = solKey(s);
-		if (!seen.has(k)){ seen.add(k); out.push(s); }
-	}
-	return out;
+	
+	console.log("Considered",opts,"options");
 }
 
 async function generateSchedule() {
@@ -1633,45 +1259,12 @@ async function generateSchedule() {
 	
 	// =====================================================
 	// Schedule-generation logic
-	let kMiss = [];
-	let candidates = [];   // {sol, kmiss} — complete non-Kinder schedules to choose among
 	try{
-		masterStartCache = new Map();   // master schedule was just rebuilt
-
-		// ---- Kinder phase: gather a few distinct starting points ----
-		const kBases = [];
 		solveServices(Kservs, emptySol());
-		for (const s of dedupeSols(SOLS))
-			kBases.push({sol: s, miss: countMissesFlat(s, Kservs)});
-		try {
-			const g = greedySolve(Kservs, emptySol());
-			repairInPlace(g);
-			kBases.push({sol: g.sol, miss: countMissesFlat(g.sol, Kservs)});
-		} catch (e) { console.warn("greedy Kinder solve failed, using DFS bases only:", e); }
-		if (kBases.length === 0)
+		if(SOLS.length == 0)
 			throw new Error("Couldn't complete Kinder schedule before moving on to non-Kinder");
-		kBases.sort((a,b) => a.miss.length - b.miss.length);
-		const topK = kBases.slice(0, KBASE_LIMIT);
-		console.log("Kinder bases (misses):", kBases.map(b => b.miss.length), "-> using", topK.length);
-
-		// ---- non-Kinder phase: build candidates on each Kinder base ----
-		for (let bi=0; bi<topK.length; bi++){
-			const base = topK[bi].sol;
-
-			try {
-				const g = greedySolve(servs, base);
-				repairInPlace(g);
-				candidates.push({sol: g.sol, kmiss: topK[bi].miss});
-			} catch (e) { console.warn("greedy non-Kinder solve failed on base", bi, ":", e); }
-
-			if (bi === 0){   // the deep DFS is expensive: run it only on the best base
-				solveServices(servs, structuredClone(base));
-				for (const s of SOLS)
-					candidates.push({sol: s, kmiss: topK[bi].miss});
-			}
-		}
-		if (candidates.length === 0)
-			throw new Error("No complete schedule could be built");
+		const KCopy = structuredClone(SOLS[0]);
+		solveServices(servs, KCopy);
 		ready = true;
 	} catch (error) {
         console.error('Error generating schedule:', error);
@@ -1680,39 +1273,43 @@ async function generateSchedule() {
 	
 	if (!ready) return;
 	
-	console.log("Candidates:", candidates.length);
-
-	//solHasE / loadImbalance now live at module scope
-
+	console.log("SOLS:",SOLS);
+	
+	function solHasE(sol,e){
+		for(let p of Object.keys(sol)){
+			for(let l of sol[p]){
+				for(let le of l){
+					if (entry2Str(le) == entry2Str(e))
+						return true;
+				}
+			}
+		}
+		return false;
+	}
+	
 	let sol = null;
 	let miss = null;
-	let bestTotal = Infinity;
-	let bestImb = Infinity;
-
-	for (const c of candidates){
-		const currmiss = [];
-		for (const k of Object.keys(servs))
-			for (const s of servs[k])
-				if (!solHasE(c.sol, s.toEntry())) currmiss.push(s);
-		const total = c.kmiss.length + currmiss.length;
-		const imb = loadImbalance(c.sol);
-		console.log("\tcandidate misses:", total, "( K", c.kmiss.length, "+", currmiss.length, ") imbalance:", imb.toFixed(2));
-		//fewest total unplaced services wins; ties broken toward the most balanced workload
-		if (miss === null || total < bestTotal || (total === bestTotal && imb < bestImb)){
-			sol = c.sol;
+	
+	for(let currsol of SOLS){
+		let currmiss = [];
+		for(let k of Object.keys(servs)){
+			for(let s of servs[k]){
+				let e = s.toEntry();
+				let found = false;
+				if (!solHasE(currsol,e))
+					currmiss.push(s);
+			}
+		}
+		console.log("\tcandidate misses:",currmiss.length);
+		if (miss === null || currmiss.length < miss.length){
+			sol = currsol;
 			miss = currmiss;
-			kMiss = c.kmiss;
-			bestTotal = total;
-			bestImb = imb;
 		}
 	}
-
-	//fold the Kinder drops (not present in `servs`) into the reported miss list
-	miss = kMiss.concat(miss);
-
-	console.log("Selected solution:", sol, "total misses:", bestTotal, "imbalance:", bestImb);
-	console.log("Misses:", miss, "(incl.", kMiss.length, "Kinder)");
-
+	
+	console.log("Selected solution:",sol);
+	console.log("Misses:",miss);
+	
 	if(miss.length > 0){
 		const parent = document.getElementById('missing-ul');
 		parent.replaceChildren();
