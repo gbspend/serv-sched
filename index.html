@@ -1019,6 +1019,31 @@ function solveServices(inservs, sol){
 			pi = 2;
 		else if (solStacks[1].length > 0)
 			pi = 1;
+
+		//A handoff can land in a priority bucket that holds no services (e.g. the
+		//uploaded list has no instruction services, or no support services). Forward
+		//those complete-so-far solutions to the next non-empty bucket, or straight
+		//into SOLS when no populated bucket remains. This replaces the old
+		//`while(servs[pi].length==0) pi++` band-aid, which left lastpi/lastserv and
+		//the desperate-suboptimal block computed against the wrong pi (crash on an
+		//empty instruction bucket; silent early `return` on an empty trailing bucket).
+		if (servs[pi].length == 0){
+			let np = pi + 1;
+			while (np < servs.length && servs[np].length == 0) np++;
+			while (solStacks[pi].length > 0){
+				const [fsol] = solStacks[pi].pop();
+				if (np >= servs.length){ SOLS.push(fsol); foundSOL = true; }
+				else solStacks[np].push([fsol, 0]);
+			}
+			while (subStacks[pi].length > 0){
+				const [fsol] = subStacks[pi].pop();
+				if (np >= servs.length) SUBS.push(fsol);
+				else subStacks[np].push([fsol, 0]);
+			}
+			if (foundSOL) vetNewSOLS();
+			continue;
+		}
+
 		const lastpi = pi == servs.length-1;
 		
 		//TEMP record stats...
@@ -1048,10 +1073,8 @@ function solveServices(inservs, sol){
 		
 		const lastserv = next_i == servs[pi].length-1;
 		
-		while(servs[pi].length == 0)
-			pi++;
-			if (pi >= servs.length)
-				return sol;
+		//(empty priority buckets are forwarded near the top of the loop now, so
+		//servs[pi] is guaranteed non-empty here)
 		
 		const curr = servs[pi][next_i];
 		//console.log("Fitting",pi,next_i,":",curr);
